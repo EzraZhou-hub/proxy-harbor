@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/wiresock/proxifyre",
+  "version": "2.6.4",
+  "commit": "5e3bc845d73a47a0931b1233c745580cb916f4ba",
+  "tree": "ca765b6daa0e3a973f4127c91e249628675562bf",
+  "license": "AGPL-3.0",
+  "auditOnly": true,
+  "integrated": false,
+  "executed": false,
+  "files": [
+    {
+      "path": "README.md",
+      "gitBlob": "ffe2a0242a67f2db9866182ca23b5d36d501517b",
+      "sha256": "8fb512077341758076925e5acc64b249cc15937bd7d740f58e8dc1d252ab15ba"
+    },
+    {
+      "path": "LICENSE",
+      "gitBlob": "0ad25db4bd1d86c452db3f9602ccdbe172438f52",
+      "sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef"
+    },
+    {
+      "path": "netlib/src/ndisapi/tcp_local_redirect.h",
+      "gitBlob": "3b6c2a8df475b3fab4021d145bbb0f0321ec2eaa",
+      "sha256": "8453203a59073d7f74e2eae2d58f9e1c28a5db2b7678419e17f23de1f230310d"
+    },
+    {
+      "path": "netlib/src/proxy/process_routing_policy.h",
+      "gitBlob": "aef8b902577dcfd5cb94c4dd6f87d5cf2f3e9283",
+      "sha256": "6aa9e7dc770643dfefcd98c598a5f0f3f82debef9810b2d2816f99db98efa200"
+    }
+  ]
+}

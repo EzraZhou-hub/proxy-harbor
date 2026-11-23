@@ -1,0 +1,11 @@
+**/node_modules/
+**/frontend/dist/
+**/bin/
+**/.task/
+**/playwright-report/
+**/test-results/
+.cache/
+.local/
+*.log
+**/wails_windows_*.syso
+**/build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
