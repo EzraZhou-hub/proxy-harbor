@@ -4,7 +4,7 @@ Windows x64 桌面工具，为官方 Claude Desktop 提供**固定代理出口**
 
 它在当前 Windows 账户下接管并重启 Claude Desktop，启动前核对 v2rayN 的本地代理入口、TUN 和公网 IPv4 出口，运行中持续核验；一旦代理、TUN、出口或守护程序异常，先阻断网络再结束受管进程树。
 
-当前版本：**1.1.2**
+当前版本：**1.1.2** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
@@ -189,3 +189,10 @@ docs/                        需求、设计与验收记录
 ## 状态说明
 
 1.1.2 的安装、Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在受控环境验证；Code 模式子进程策略已编译并通过单元回归，真实 Code 模式使用需在本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE)。可以自由使用、修改、分发和商用，只需保留版权声明与许可文本。
+
+第三方依赖（Go、Wails、Vue、Node.js、NSIS 等）仍遵循各自的开源许可证。安装包未签名，分发时请附带同名校验文件。
+
