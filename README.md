@@ -1,118 +1,191 @@
 # Proxy Harbor
 
-Proxy Harbor 1.1.2 为官方 Claude Desktop x64 安装版提供固定代理出口和会话保护。Claude 在当前 Windows 账户下接管并重启，Chrome 验证入口用于排查本机代理和 TUN。
+Windows x64 桌面工具，为官方 Claude Desktop 提供**固定代理出口**和**会话保护**。
 
-## 安装和使用
+它在当前 Windows 账户下接管并重启 Claude Desktop，启动前核对 v2rayN 的本地代理入口、TUN 和公网 IPv4 出口，运行中持续核验；一旦代理、TUN、出口或守护程序异常，先阻断网络再结束受管进程树。
 
-1. 运行 `app\proxy-harbor\bin\release-1.1.2\Proxy-Harbor-1.1.2-win-x64-setup.exe`，然后从开始菜单以普通权限打开 Proxy Harbor。
-2. 开启 v2rayN 全局模式和 TUN，确认本地 HTTP 代理监听 `127.0.0.1:10808`。在「连接概览」保存该节点的公网 IPv4。
-3. 保存 Claude 中的工作，点击「接管并重启 Claude」，接受守护程序的管理员授权。网络限制就绪后，程序会退出已有 Claude 进程，再用当前 Windows 账户打开同一安装并沿用原有配置。
-4. 点击「结束 Claude 会话」，等待自动清理。如果显示「需要恢复」，点击「核对并恢复限制」。升级或卸载前结束并清理会话。
+当前版本：**1.1.2**
 
-保护覆盖 Proxy Harbor 启动的 Claude 窗口及其受管进程。会话期间系统传统 DNS 会受到临时限制，其他应用可能也会受影响。1.1.2 起，Claude 启动的同用户子程序（Code 模式的 Claude Code CLI、git、wsl、终端等）不再按镜像终止，这些进程沿用 v2rayN 全局/TUN；WFP 逐镜像固定出口只覆盖 Claude.exe 客户端本身，身份不符或组件数量超限仍会结束会话。已验证官方安装版的同账户重启、正常停止、代理和 TUN 中断以及守护崩溃恢复。按用户决定跳过了沙盒登录验证，现有 Claude 登录是否能跨重启保留仍待确认。Code 模式修复已编译并通过单元回归，真实 Code 模式待用户本机确认；外部浏览器和 Cowork 未纳入验收。
+---
 
-安装器未签名，发行目录提供同名 `.sha256` 校验文件。在 Windows x64 上用现有 Go、Wails、Node、MSVC 工具链及开源 NSIS 执行 `scripts\release.ps1` 可重新打包。脚本会核对守护程序 SHA-256，并生成安装包校验文件。
+## 功能特性
 
-## Chrome 本机试用
+- **固定出口接管**：自动识别当前账户注册的官方 Claude Desktop x64（MSIX），退出已有进程后用同一账户重新启动，沿用原有配置和登录状态。
+- **启动前核验**：确认 `127.0.0.1:10808` 由 v2rayN 内核监听、TUN 默认路由生效、经代理观测的公网 IPv4 与保存值一致，任一不符则拒绝启动。
+- **运行中核验**：约每 10 秒经指定代理查询公网 IPv4；出口变化、查询失败、代理进程退出、TUN 路由改变、WFP 规则被修改都会触发断开。
+- **进程约束**：受管 Claude 的客户端镜像由 WFP 限定为仅允许 TCP 连接 `127.0.0.1:10808`，阻断 IPv6、UDP、其他地址/端口及非回环入站。
+- **可恢复**：异常结束后保留会话记录，可在界面执行「核对并恢复限制」，逐项清理规则、DNS 限制和临时记录。
+- **Chrome 本机验证**：用独立临时配置启动 Chrome，快速验证当前代理、TUN 和固定出口是否可用。
+- **诊断**：会话目录记录状态、出口观测、被放行/阻断的子程序镜像，便于排查兼容性问题。
 
-1. 打开 Proxy Harbor，进入「本机验证」。
-2. 确认 v2rayN 的全局模式和 TUN 已开启，HTTP 代理入口为 `127.0.0.1:10808`。在「连接概览」保存该节点的公网 IPv4，在「应用管理」核对 Google Chrome 程序路径。
-3. 保存工作并完全退出已有 Chrome。在「本机验证」点击「启动隔离应用并保护」，接受 Windows 管理员授权，等状态显示「会话保护中」。新窗口使用临时配置。会话期间全机传统 DNS 查询会被临时限制，可能影响其他程序解析域名。
-4. 试用结束时点击「结束本次应用」，等状态显示「已停止」。如显示「需要恢复」，点击「核对并恢复限制」，按提示授权并等待清理完成。
+## 工作原理
 
-以下带日期的条目记录当时的开发与验收状态。
+```text
+Proxy Harbor（普通权限）
+   └─ 管理员授权 ──> proxy-harbor-guardian.exe（守护程序）
+                        ├─ 核对 v2rayN 监听进程、TUN、公网 IPv4
+                        ├─ 安装 WFP 规则 + 临时限制系统传统 DNS
+                        ├─ 退出已有 Claude，用当前用户重启 MSIX 版
+                        ├─ 周期核验出口 / 规则 / TUN / 代理进程
+                        └─ 异常：紧急阻断 → 结束进程树 → 保留恢复记录
+```
 
-2026-11-16 固定出口流程已接入配置与界面，支持保存预期 IPv4，并用于启动前和运行中比对。用户管理 v2rayN 全局/TUN。当前核验代理入口的出口，逐目标路径和新增策略仍待实测，桌面保护入口关闭。见[当前需求](docs/current-requirements.md)。
+Claude 的流量路径：`Claude.exe → 127.0.0.1:10808（v2rayN）→ 远程节点 → 目标`。
 
-2026-11-16 指定应用增强正在开发：新增临时 Chrome 用户策略配置和脱敏路由模型检查工具。原生编译及 Go 回归通过，新增 Windows 策略路径未运行，370 条记录对应此前版本。完整保证范围和剩余缺口见[指定应用设计核对](docs/p0-selected-application-design.md)。
+## 系统要求
 
-2026-11-16 重新验收：包 `20261116-005349-93581a` 的 31 个协议顶层测试及 370 条限定来宾检查通过，包含安装版 Chrome、进程身份、真实 HTTPS、异常终止、恢复及独立清理。修复了设备发现导致启动后终止的问题。**P0 总体仍未验收，桌面保护关闭**；Defender 检测原因仍待复核。详见[最新验收记录](docs/p0-session-acceptance.md)。
+- Windows 10 / 11 x64
+- 官方 Claude Desktop x64 安装版（MSIX，安装到 `C:\Program Files\WindowsApps`）
+- v2rayN，开启**全局模式**和 **TUN**，本地 HTTP 代理监听 `127.0.0.1:10808`
+- 启动和恢复时需要 Windows 管理员授权（UAC）
+- 安装程序自带 WebView2 引导；系统缺少时会自动安装
 
-2026-11-16 重测前的历史阻塞：Windows Defender 隔离原生守护候选，上一轮停在来宾输入校验阶段。原始隔离与单项复核记录保留，后续完整重测见上方最新记录。
+## 安装
 
-2026-11-15 最新补测：独立普通用户身份的 Chrome 会话候选取得 31 个协议顶层测试和 320 条检查通过的限定证据，包含未登记子程序首包约束、12 个守护场景、真实 HTTPS、可见窗口、正式 Runtime 启动/停止和独立清理。按替换后的 AGENTS 约束，**P0 仍未验收，两个桌面入口保持禁用，不进入 P1**。详见 [本轮候选验证与边界](docs/p0-session-acceptance.md)。此前 98/19 原型和无身份继承的缺口记录保留为历史，见 [旧原型记录](docs/managed-session-progress.md)。
+1. 运行 `app\proxy-harbor\bin\release-1.1.2\Proxy-Harbor-1.1.2-win-x64-setup.exe`。
+2. 安装到 `C:\Program Files\Proxy Harbor`，从开始菜单以**普通权限**打开 Proxy Harbor。
+3. 安装器未签名；发行目录提供同名 `.sha256`，可用 `Get-FileHash` 校验：
 
-当前产品范围以 [最新需求](docs/current-requirements.md) 为准：复用 v2rayN，监控指定应用代理路径并在异常时阻断和终止；DNS/WebRTC 为可选增强，本轮使用 Chrome，暂不测试 Claude。候选已接线验证，但桌面保护未开放。
+```powershell
+Get-FileHash .\Proxy-Harbor-1.1.2-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\Proxy-Harbor-1.1.2-win-x64-setup.exe.sha256
+```
 
-最新 P0 补测：2026-11-14 第 1、2 项的限定连接变化与异常恢复验证通过，新增 87 条检查及 382 条原有组合回归通过。仍有双网络切换、睡眠、最终 SID 重启/最早启动等未验收项，桌面保护仍不可开启。见 [本轮记录](docs/p0-lifecycle-validation.md)。
+## 使用方法
 
-Windows 桌面应用专属代理启动器。技术栈：Go + Wails 3.1.0 + Vue 3 / TypeScript / Vite。
+### 1. 准备
 
-当前桌面交付是可运行的配置和诊断界面，**不能开启网络保护**。它不会自动启动受管应用或安装系统策略。原生候选的网络保护能力仅按限定来宾证据记录，不能视作生产验收。
+1. 启动 v2rayN，切到**全局模式**并开启 **TUN**，确认 HTTP 代理为 `127.0.0.1:10808`。
+2. 打开 Proxy Harbor，进入「连接概览」。
+3. 点击「配置固定出口」，填写该节点的**公网 IPv4**（在 v2rayN 或 IP 查询网站确认），点「保存出口 IP」。
 
-## 已实现
+### 2. 启动保护
 
-- 连接概览、应用管理、代理配置、本机验证、诊断与日志五个页面。
-- HTTP / HTTPS / SOCKS5 代理入口的新增、编辑、选择、删除及本地持久化。
-- Claude、Codex 的 EXE 路径登记、文件选择和存在性检查，不执行程序。
-- 读取本机平台、主机名称及活动网卡地址；不请求外部网络。
-- JSON 报告导出，明确标记尚未运行的出口、DNS、IPv6、UDP 检测。
-- 传输无关的控制接口、可替换内核接口、配置校验、替换写入和拒绝保护启动的后台边界。
-- 桌面重复启动切回同一数据目录的已有窗口；存储层检查配置是否被其他进程更改，拒绝旧快照覆盖。
-- 未保存的应用路径草稿在其他配置保存、本机信息刷新时保留。
-- 配置加载失败时进入恢复页，可重新读取或打开配置目录；损坏/不兼容配置只有在用户确认并成功备份后才重置。
+1. 在 Claude 中保存工作并退出正在运行的对话（程序会强制退出已有 Claude 进程）。
+2. 在「连接概览」点击「接管并重启 Claude」。
+3. 在 UAC 提示中允许守护程序运行。
+4. 等待状态变为「会话保护中」；Claude 会以当前账户重新打开，沿用原有配置，登录状态通常保留（如被登出需重新登录）。
 
-密码/认证、SQLite 历史、Windows 服务及 Named Pipe、托盘驻留、原生代理内核、实际泄露检测与阻断尚未接入。当前使用进程内控制实现，不冒充已经部署的独立守护服务。
+启动失败的常见原因会直接显示在状态区，例如代理入口不符、TUN 未就绪、固定出口不一致、管理员授权被取消。
 
-## 直接运行
+### 3. 结束与恢复
 
-构建后的文件位于 `app\proxy-harbor\bin\proxy-harbor.exe`，双击即可。当前为普通权限桌面程序。
+- 正常结束：点击「结束 Claude 会话」，等待状态显示「已停止」，规则和 DNS 限制会自动清理。
+- 异常或残留：状态显示「需要恢复」时，点击「核对并恢复限制」并按提示授权。
 
-首次保存时配置写入 `%APPDATA%\ProxyHarbor\config.json`。可以在启动前通过 `PROXY_HARBOR_DATA_DIR` 指定其他目录；测试使用项目 `.local` 下的独立数据，不触碰正式配置。此位置与 Go 的 D 盘工具/依赖缓存配置相互独立。
+### 4. Chrome 本机验证（可选）
 
-恢复配置时，原始文件逐字节备份到同目录的 `config.backup-*.json`，界面显示具体位置。备份或重置失败时保留原配置；读取权限错误不提供重置。正常配置被外部修改后，可在“诊断与日志”重新读取配置，再继续保存。
+1. 在「应用管理」核对 Google Chrome 路径。
+2. 保存工作并完全退出已有 Chrome。
+3. 在「本机验证」点击「启动隔离应用并保护」，等状态变为「会话保护中」。
+4. 结束用「结束本次应用」。
 
-开发阶段暂不对 Claude 做任何测试，也不启动、探测或操作其安装及用户数据。应用相关回归使用 Codex 和隔离的通用测试数据；Claude 验收留到项目最后，等待用户明确通知。约束记录于 [AGENTS.md](AGENTS.md)。
+Chrome 使用临时配置目录，不读取或修改日常浏览数据；会话期间全机传统 DNS 查询会被临时限制。
 
-## 开发与构建
+## Code 模式说明（1.1.2 起）
 
-在本仓库目录使用 PowerShell：
+Claude Desktop 的 Code / Cowork 会启动不同镜像的子程序（`cowork-svc.exe`、`claude-ssh-*.exe`、Claude Code CLI、`git.exe`、`wsl.exe`、终端等）。1.1.2 起：
+
+- 与 Claude 同属当前 Windows 账户的子进程不再按镜像终止，镜像会记录到会话目录的 `takeover-components.log`。
+- 逐镜像的 WFP 固定出口仍只覆盖 `Claude.exe` 客户端本身；Code 模式的后代进程沿用 v2rayN 全局/TUN。
+- 子进程身份无法核对（不同账户）或组件数量超限时，会话仍会结束。
+- **使用 Code 模式时必须保持 TUN 开启**；两次出口核验之间（约 10 秒）后代进程的直连不会被单独的 WFP 规则拦截。
+
+## 保护范围与已知限制
+
+- 保护对象是 Proxy Harbor 启动的 Claude 窗口及其受管进程，不覆盖系统中其他程序。
+- 会话期间全机传统 DNS 查询会被临时限制，其他应用解析域名可能受影响。
+- 外部浏览器回调（OAuth 等）和 Cowork 未纳入本轮验收。
+- 守护程序以管理员权限运行，但只操作本会话拥有的 WFP 规则、临时 DNS 限制和会话记录；不读取 v2rayN 节点配置或凭据，不修改系统代理设置。
+- 固定出口核验针对指定代理入口，不能据此宣称每条连接的公网源 IP 都已逐条观测。
+
+## 配置与数据位置
+
+| 内容 | 位置 |
+| --- | --- |
+| 配置（代理、应用路径、固定出口） | `%APPDATA%\ProxyHarbor\config.json` |
+| 会话记录与诊断 | `%APPDATA%\ProxyHarbor\sessions\<会话ID>\` |
+| 自定义数据目录 | 启动前设置环境变量 `PROXY_HARBOR_DATA_DIR` |
+
+会话目录中常用文件：`status.json`（状态与原因）、`exit-check.json`（最近出口观测）、`takeover-components.log`（被放行的子程序镜像）、`takeover-component.json`（最后一次阻断记录）、`component-check.json`（组件核对失败详情）。
+
+配置损坏时可从恢复页重新读取；重置前会逐字节备份为 `config.backup-*.json`。
+
+## 升级与卸载
+
+- **升级**：先「结束 Claude 会话」并完全退出 Proxy Harbor，再运行新版本安装包原地覆盖；配置和历史记录保留。
+- **卸载**：同样要求没有进行中的会话；卸载不会删除 `%APPDATA%\ProxyHarbor` 中的配置。
+- 覆盖安装或卸载前若有遗留会话，安装程序会拒绝并提示先停止或恢复。
+
+## 从源码构建
+
+需要 Go 1.26+、Wails CLI 3.1.0、Node.js、WebView2、MSVC 2022（原生守护程序）；打包还需要 NSIS。
 
 ```powershell
 # 开发模式
 .\scripts\dev.ps1
 
-# 构建桌面程序
+# 构建桌面程序（bin\proxy-harbor.exe）
 .\scripts\build.ps1
 
-# 构建并运行核心和真实前后端集成测试
+# 构建并运行 Go 测试、前端回归和界面集成测试
 .\scripts\build.ps1 -Check -E2E
+
+# 生成安装包（校验守护程序指纹并输出 SHA-256）
+.\scripts\release.ps1
 ```
 
-需 Go 1.26+、Wails CLI 3.1.0、Node.js/npm、WebView2。界面集成测试使用已安装的 Microsoft Edge（无头模式），不自动下载浏览器。未安装 Edge 时，核心测试与桌面构建仍可执行。
-
-`-Check` 同时执行 Go 测试和前端草稿回归。草稿测试使用 Node 原生 TypeScript 加载能力，本次验证环境为 Node 24.12.0。
-
-如果 Go 默认模块源不可达，可以在当前终端临时设置：
+模块代理不可达时可临时设置：
 
 ```powershell
 $env:GOPROXY = 'https://goproxy.cn'
 ```
 
-构建/测试不会自动安装驱动或注册服务。Go 缓存沿用已配置的 D 盘路径，根目录构建脚本把 npm 缓存放到项目 `.cache\npm`。
+原生守护程序由 `scripts\build-guardian.ps1` 编译，其 SHA-256 与源码哈希固定在 `app\proxy-harbor\internal\session\approved_guardian.json`。修改 `native\session\*.c` 后必须重新编译并更新该文件，否则桌面程序会以“缺少匹配的守护程序”拒绝启动。
 
-## 代码结构
+## 目录结构
 
 ```text
 app/proxy-harbor/
-  main.go                  桌面入口与依赖装配
-  internal/domain/         配置、能力、状态及校验
-  internal/control/        与传输方式无关的后台接口
-  internal/core/           配置操作与启动保护边界
-  internal/store/          配置读写，Windows 替换写入
-  internal/engine/         内核适配接口及明确不可用的默认实现
-  internal/diagnostics/    本机只读信息、待验证检测项
-  internal/desktop/        Wails 绑定与原生文件选择
-  frontend/src/            Vue 界面与生成绑定入口
-  frontend/bindings/       自动生成的 Go/TypeScript 类型绑定
-  frontend/tests/          真实 Go 后台集成测试
-  build/                   Wails 构建资源，当前只验证 Windows
-scripts/                   开发、构建与环境维护脚本
-docs/                      计划、调研与本次交付说明
+  main.go                    桌面入口与依赖装配
+  internal/domain/           配置、状态、校验
+  internal/core/             配置操作与启动保护边界
+  internal/session/          会话生命周期、守护指纹准入
+  internal/store/            配置读写与恢复
+  internal/engine/           内核适配与诊断
+  internal/desktop/          Wails 绑定与文件选择
+  frontend/src/              Vue 3 界面（连接概览、应用管理、代理配置、本机验证、诊断）
+native/session/              守护程序、Claude 接管、DNS/TCP 核验（C）
+native/p0/                   P0 阶段系统实验代码
+scripts/                     开发、构建、发布与 P0 实验脚本
+docs/                        需求、设计与验收记录
 ```
 
-开源内核当前仅调研，尚未复制或链接 ProxyBridge / ProxiFyre / proxybox 代码。后续采用任何代码或二进制时逐项记录版本与许可。
+## 常见问题
 
-下一步是 [开发计划](docs/development-plan.md) 中的 P0：在可恢复环境验证真实内核与独立防绕过策略。当前基础框架不代表 P0 已通过。详见 [基础框架交付记录](docs/scaffold-status.md)。
+**「缺少匹配的守护程序，请核对桌面构建」**
+`proxy-harbor.exe` 内嵌的守护指纹与实际 `proxy-harbor-guardian.exe` 不一致。通常是只替换了其中一个文件，或用了不同版本的文件，重装同一版本安装包即可。
 
-P0 进行中：2026-11-14 已按用户要求集中推进，限定 IPv4 批次的协议、无调试例外的 SID/WFP 隔离、DNS 缓存边界、UDP/双栈阻断、入口身份及指定真实 HTTPS 出口等阶段通过；实际公网 UDP 另取得项目过滤器丢包事件，12 条基础规则的授权来宾重启恢复检查通过。用户已选择现有 v2rayN 全局路由。最早开机、完整网络切换等 P0 边界及真实应用兼容尚未完整验收，桌面保护继续不可开启，不进入下一阶段。见 [本轮统一记录](docs/p0-batch-progress.md)、[进度与恢复点](docs/p0-transparent-progress.md)。候选审计和历史包见 [P0 验证记录](docs/p0-validation.md)。
+**「请先结束或恢复当前会话」**
+存在未清理的会话记录。回到「连接概览」结束会话；显示「需要恢复」时先执行「核对并恢复限制」。
+
+**启动时提示出口不一致 / 无法核对**
+节点公网 IP 变了或代理不可用。确认 v2rayN 全局 + TUN 正常、IP 查询可用后，重新保存固定出口。
+
+**Code 模式打不开或子程序报权限错误**
+先确认使用的是 1.1.2 及以上版本，再查看会话目录的 `takeover-components.log` 是否记录了对应镜像；若仍失败，把该日志和 `%LOCALAPPDATA%\Claude\logs\main.log` 的相关片段一并留存。
+
+**会话结束后其他程序短暂无法解析域名**
+系统传统 DNS 限制正在恢复。等待状态变为「已停止」；若长时间未恢复，执行「核对并恢复限制」。
+
+## 文档
+
+- [当前需求与实现范围](docs/current-requirements.md)
+- [Code 模式子进程问题定位与修复](docs/claude-code-mode-fix.md)
+- [守护程序会话验收记录](docs/p0-session-acceptance.md)
+- [指定应用设计与边界](docs/p0-selected-application-design.md)
+- [开发约束与历次实验记录](AGENTS.md)
+
+## 状态说明
+
+1.1.2 的安装、Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在受控环境验证；Code 模式子进程策略已编译并通过单元回归，真实 Code 模式使用需在本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
