@@ -1,5 +1,7 @@
 # 当前需求与实现范围
 
+2026-11-23 Code 模式进程监管改造（1.1.3）。1.1.2 放行同用户子进程后仍有终端命令失败，按用户要求只改进程监管、保留固定出口。Worker 由 `DEBUG_PROCESS` 调试整棵树改为 `CREATE_SUSPENDED` + Job（`KILL_ON_JOB_CLOSE`）+ 校验后恢复；结束会话改用 `TerminateJobObject`，Job 不可用时回退为终止根进程与关联后代并记录 `takeover-containment.json`；组件镜像改为每 2 秒采样。WFP 规则、固定出口核验、TUN/代理检查全部未改。守护编译、Go/前端回归、独立 Job 终止测试通过；未启动 Claude，真实 Code 模式待用户本机确认。见 [进程监管改造](claude-code-mode-supervision.md)。
+
 2026-11-23 Code 模式修复（1.1.2）。用户报告经 Proxy Harbor 打开 Claude 后 Code 模式无法正常打开，原因为接管监督终止所有镜像不是 `Claude.exe` 的子进程（退出码 5），Claude 日志同时出现 `Claude Code process exited with code 5`、`git`/`wsl.exe` 退出 5。新策略仅按会话用户 SID 约束后代并记录组件日志，已退出子进程不再误判；当前用户模式入站规则恢复回环例外。WFP 固定出口仍只覆盖 Claude.exe，后代沿用 v2rayN 全局/TUN。守护编译、Go 与前端单元回归通过，安装包为 `Proxy-Harbor-1.1.2-win-x64-setup.exe`；真实 Code 模式待用户本机确认。见 [定位与修复](claude-code-mode-fix.md)。
 
 2026-11-18 桌面界面以 Claude Desktop 固定出口隔离为主。概览集中展示 Claude 的开放状态和固定出口，Chrome 启动、停止与恢复集中在「本机验证」。Codex 退出桌面功能范围，旧配置仍可打开，之后保存时移除旧条目。Claude 的本机隔离启动仍待开放。

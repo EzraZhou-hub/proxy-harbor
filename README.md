@@ -4,7 +4,7 @@ Windows x64 桌面工具，为官方 Claude Desktop 提供**固定代理出口**
 
 它在当前 Windows 账户下接管并重启 Claude Desktop，启动前核对 v2rayN 的本地代理入口、TUN 和公网 IPv4 出口，运行中持续核验；一旦代理、TUN、出口或守护程序异常，先阻断网络再结束受管进程树。
 
-当前版本：**1.1.2** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+当前版本：**1.1.3** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
@@ -42,13 +42,13 @@ Claude 的流量路径：`Claude.exe → 127.0.0.1:10808（v2rayN）→ 远程�
 
 ## 安装
 
-1. 运行 `app\proxy-harbor\bin\release-1.1.2\Proxy-Harbor-1.1.2-win-x64-setup.exe`。
+1. 运行 `app\proxy-harbor\bin\release-1.1.3\Proxy-Harbor-1.1.3-win-x64-setup.exe`。
 2. 安装到 `C:\Program Files\Proxy Harbor`，从开始菜单以**普通权限**打开 Proxy Harbor。
 3. 安装器未签名；发行目录提供同名 `.sha256`，可用 `Get-FileHash` 校验：
 
 ```powershell
-Get-FileHash .\Proxy-Harbor-1.1.2-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\Proxy-Harbor-1.1.2-win-x64-setup.exe.sha256
+Get-FileHash .\Proxy-Harbor-1.1.3-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\Proxy-Harbor-1.1.3-win-x64-setup.exe.sha256
 ```
 
 ## 使用方法
@@ -82,13 +82,14 @@ Get-Content .\Proxy-Harbor-1.1.2-win-x64-setup.exe.sha256
 
 Chrome 使用临时配置目录，不读取或修改日常浏览数据；会话期间全机传统 DNS 查询会被临时限制。
 
-## Code 模式说明（1.1.2 起）
+## Code 模式说明（1.1.3 起）
 
-Claude Desktop 的 Code / Cowork 会启动不同镜像的子程序（`cowork-svc.exe`、`claude-ssh-*.exe`、Claude Code CLI、`git.exe`、`wsl.exe`、终端等）。1.1.2 起：
+Claude Desktop 的 Code / Cowork 会启动不同镜像的子程序（`cowork-svc.exe`、`claude-ssh-*.exe`、Claude Code CLI、`git.exe`、`wsl.exe`、终端等）。1.1.3 起：
 
-- 与 Claude 同属当前 Windows 账户的子进程不再按镜像终止，镜像会记录到会话目录的 `takeover-components.log`。
+- 不再用调试器接管整棵进程树：Claude 以挂起方式启动、放入 Job 对象后再恢复运行，终端命令以原生方式执行，不被逐个挂起或终止。
 - 逐镜像的 WFP 固定出口仍只覆盖 `Claude.exe` 客户端本身；Code 模式的后代进程沿用 v2rayN 全局/TUN。
-- 子进程身份无法核对（不同账户）或组件数量超限时，会话仍会结束。
+- 结束会话或出现异常时由 Job 统一终止整棵树；若 Job 无法创建或嵌套，守护会退回“终止根进程及其关联后代”，并把结果写入会话目录的 `takeover-containment.json`。
+- 子程序镜像按每 2 秒采样记录到 `takeover-components.log`，短命进程可能漏记。
 - **使用 Code 模式时必须保持 TUN 开启**；两次出口核验之间（约 10 秒）后代进程的直连不会被单独的 WFP 规则拦截。
 
 ## 保护范围与已知限制
@@ -173,7 +174,7 @@ docs/                        需求、设计与验收记录
 节点公网 IP 变了或代理不可用。确认 v2rayN 全局 + TUN 正常、IP 查询可用后，重新保存固定出口。
 
 **Code 模式打不开或子程序报权限错误**
-先确认使用的是 1.1.2 及以上版本，再查看会话目录的 `takeover-components.log` 是否记录了对应镜像；若仍失败，把该日志和 `%LOCALAPPDATA%\Claude\logs\main.log` 的相关片段一并留存。
+先确认使用的是 1.1.3 及以上版本，再查看会话目录的 `takeover-components.log` 是否记录了对应镜像；若仍失败，把该日志和 `%LOCALAPPDATA%\Claude\logs\main.log` 的相关片段一并留存。
 
 **会话结束后其他程序短暂无法解析域名**
 系统传统 DNS 限制正在恢复。等待状态变为「已停止」；若长时间未恢复，执行「核对并恢复限制」。
@@ -182,13 +183,14 @@ docs/                        需求、设计与验收记录
 
 - [当前需求与实现范围](docs/current-requirements.md)
 - [Code 模式子进程问题定位与修复](docs/claude-code-mode-fix.md)
+- [Code 模式进程监管改造（1.1.3）](docs/claude-code-mode-supervision.md)
 - [守护程序会话验收记录](docs/p0-session-acceptance.md)
 - [指定应用设计与边界](docs/p0-selected-application-design.md)
 - [开发约束与历次实验记录](AGENTS.md)
 
 ## 状态说明
 
-1.1.2 的安装、Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在受控环境验证；Code 模式子进程策略已编译并通过单元回归，真实 Code 模式使用需在本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
+Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在 1.1.1/1.1.2 的受控环境验证；1.1.3 的 Job 托管改动通过编译、Go 与前端回归以及独立 Job 终止测试，真实 Code 模式与出口核验仍需本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
 
 ## 许可证
 
