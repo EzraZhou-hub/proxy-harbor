@@ -409,75 +409,121 @@ static void report_component(const wchar_t *folder, DWORD pid, const wchar_t *pa
     }
 }
 
-static DWORD supervise_processes(CLAUDE_TAKEOVER *state, HANDLE pipe, HANDLE root, const wchar_t *folder) {
-    DWORD tracked[256] = {0};
-    DWORD result = ERROR_BROKEN_PIPE;
-    while (PeekNamedPipe(pipe, NULL, 0, NULL, NULL, NULL)) {
-        DEBUG_EVENT event;
-        if (!WaitForDebugEventEx(&event, 100)) {
-            DWORD error = GetLastError();
-            if (error != ERROR_SEM_TIMEOUT) {
-                result = error;
-                break;
+static void report_containment(const wchar_t *folder, BOOL job, DWORD error) {
+    wchar_t path[1200];
+    if (swprintf_s(path, ARRAYSIZE(path), L"%ls\\takeover-containment.json", folder) < 0)
+        return;
+    char text[96];
+    int length = sprintf_s(text, sizeof(text), "{\"job\":%s,\"error\":%lu}\n",
+                           job ? "true" : "false", error);
+    if (length < 0)
+        return;
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                              FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written;
+    WriteFile(file, text, (DWORD)length, &written, NULL);
+    CloseHandle(file);
+}
+
+// Fallback when a job cannot be created or assigned: stop the root and the
+// descendants still linked to it through their recorded parent process id.
+static void terminate_tree(HANDLE root) {
+    DWORD known[256] = {0};
+    unsigned count = 1;
+    known[0] = GetProcessId(root);
+    TerminateProcess(root, 1);
+    WaitForSingleObject(root, 2000);
+    for (int pass = 0; pass < 4 && count < ARRAYSIZE(known); ++pass) {
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return;
+        PROCESSENTRY32W entry = {0};
+        entry.dwSize = sizeof(entry);
+        unsigned before = count;
+        for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
+            BOOL related = FALSE, listed = FALSE;
+            for (unsigned i = 0; i < count; ++i) {
+                if (known[i] == entry.th32ParentProcessID)
+                    related = TRUE;
+                if (known[i] == entry.th32ProcessID)
+                    listed = TRUE;
             }
-            if (WaitForSingleObject(root, 0) == WAIT_OBJECT_0) {
-                result = ERROR_SUCCESS;
+            if (!related || listed)
+                continue;
+            if (count == ARRAYSIZE(known))
                 break;
+            known[count++] = entry.th32ProcessID;
+            HANDLE child = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+            if (child) {
+                TerminateProcess(child, 1);
+                WaitForSingleObject(child, 1000);
+                CloseHandle(child);
             }
+        }
+        CloseHandle(snapshot);
+        if (count == before)
+            break;
+    }
+}
+
+#define SEEN_SLOTS 256
+
+// Record newly observed descendants for compatibility reports. This replaces
+// the per-creation debug events; short-lived helpers can be missed by the
+// two-second sampling window.
+static void scan_components(HANDLE job, CLAUDE_TAKEOVER *state, const wchar_t *folder,
+                            DWORD *seen, unsigned *next) {
+    ULONG_PTR storage[516];
+    JOBOBJECT_BASIC_PROCESS_ID_LIST *list = (void *)storage;
+    if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, list,
+                                   sizeof(storage), NULL) ||
+        list->NumberOfAssignedProcesses != list->NumberOfProcessIdsInList)
+        return;
+    for (DWORD i = 0; i < list->NumberOfProcessIdsInList; ++i) {
+        DWORD pid = (DWORD)list->ProcessIdList[i];
+        BOOL known = FALSE;
+        for (unsigned j = 0; j < SEEN_SLOTS && !known; ++j)
+            known = seen[j] == pid;
+        if (known)
             continue;
+        seen[*next] = pid;
+        *next = (*next + 1) % SEEN_SLOTS;
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!process)
+            continue;
+        wchar_t path[1024] = {0};
+        DWORD length = ARRAYSIZE(path);
+        if (QueryFullProcessImageNameW(process, PROCESS_NAME_NATIVE, path, &length) &&
+            _wcsicmp(path, state->identity.image))
+            report_component(folder, pid, path, "child_admitted", FALSE);
+        CloseHandle(process);
+    }
+}
+
+static DWORD supervise_processes(CLAUDE_TAKEOVER *state, HANDLE pipe, HANDLE root,
+                                 HANDLE job, const wchar_t *folder) {
+    DWORD seen[SEEN_SLOTS] = {0};
+    unsigned next = 0;
+    ULONGLONG next_scan = 0;
+    DWORD result = ERROR_BROKEN_PIPE;
+    for (;;) {
+        if (!PeekNamedPipe(pipe, NULL, 0, NULL, NULL, NULL))
+            break;
+        DWORD wait = WaitForSingleObject(root, 200);
+        if (wait == WAIT_OBJECT_0) {
+            result = ERROR_SUCCESS;
+            break;
         }
-        DWORD continuation = DBG_CONTINUE;
-        if (event.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT) {
-            CREATE_PROCESS_DEBUG_INFO *info = &event.u.CreateProcessInfo;
-            if (info->hFile)
-                CloseHandle(info->hFile);
-            if (WaitForSingleObject(info->hProcess, 0) != WAIT_OBJECT_0) {
-                unsigned index = 0;
-                while (index < ARRAYSIZE(tracked) && tracked[index])
-                    ++index;
-                wchar_t path[1024] = {0};
-                DWORD length = ARRAYSIZE(path);
-                BYTE sid[SECURITY_MAX_SID_SIZE];
-                BOOL identified = QueryFullProcessImageNameW(info->hProcess, PROCESS_NAME_NATIVE, path, &length) &&
-                                  !process_user(info->hProcess, sid) && EqualSid(sid, state->identity.sid);
-                if (!identified || index == ARRAYSIZE(tracked)) {
-                    report_component(folder, event.dwProcessId, path,
-                                     identified ? "capacity" : "identity_mismatch", TRUE);
-                    result = ERROR_INVALID_OWNER;
-                    break;
-                }
-                // Claude Desktop starts helpers from its own package and, in
-                // Code mode, the user's toolchain (Claude Code CLI, git,
-                // wsl, shells). Those descendants share the session user's
-                // token and the system-wide TUN/global proxy path; only the
-                // client image itself stays bound to the explicit proxy by
-                // WFP. A child that cannot be tied to the session user, or a
-                // capacity overflow, still ends the session.
-                if (_wcsicmp(path, state->identity.image))
-                    report_component(folder, event.dwProcessId, path, "child_admitted", FALSE);
-                tracked[index] = event.dwProcessId;
-            }
-        } else if (event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) {
-            if (event.u.LoadDll.hFile)
-                CloseHandle(event.u.LoadDll.hFile);
-        } else if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
-            DWORD code = event.u.Exception.ExceptionRecord.ExceptionCode;
-            continuation = DBG_EXCEPTION_NOT_HANDLED;
-            if (code == EXCEPTION_BREAKPOINT && event.u.Exception.dwFirstChance)
-                for (unsigned i = 0; i < ARRAYSIZE(tracked); ++i)
-                    if (tracked[i] == event.dwProcessId) {
-                        tracked[i] = 0;
-                        continuation = DBG_CONTINUE;
-                        break;
-                    }
-        } else if (event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
-            for (unsigned i = 0; i < ARRAYSIZE(tracked); ++i)
-                if (tracked[i] == event.dwProcessId)
-                    tracked[i] = 0;
-        }
-        if (!ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continuation)) {
+        if (wait == WAIT_FAILED) {
             result = GetLastError();
             break;
+        }
+        ULONGLONG now = GetTickCount64();
+        if (job && now >= next_scan) {
+            scan_components(job, state, folder, seen, &next);
+            next_scan = now + 2000;
         }
     }
     return result;
@@ -520,6 +566,7 @@ DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD 
         return connection_error;
     DWORD error = ClaudeTakeoverRead(state, journal);
     PROCESS_INFORMATION app = {0};
+    HANDLE job = NULL;
     if (error || !EqualSid(sid, state->identity.sid)) {
         if (!error)
             error = ERROR_INVALID_OWNER;
@@ -537,12 +584,31 @@ DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD 
     }
     STARTUPINFOW startup = {0};
     startup.cb = sizeof(startup);
-    if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, CREATE_SUSPENDED | DEBUG_PROCESS, NULL, local, &startup, &app)) {
+    // Start without a debugger so Code mode commands run natively. The job
+    // provides tree containment and kill-on-close; the client image itself is
+    // still bound to the explicit proxy by the guardian's WFP rules.
+    if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, local, &startup, &app)) {
         error = GetLastError();
         goto done;
     }
-    if (!DebugSetProcessKillOnExit(TRUE) || !ClaudeTakeoverCovered(state, app.hProcess))
+    if (!ClaudeTakeoverCovered(state, app.hProcess))
         goto done;
+    job = CreateJobObjectW(NULL, NULL);
+    if (job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
+            !AssignProcessToJobObject(job, app.hProcess)) {
+            DWORD reason = GetLastError();
+            CloseHandle(job);
+            job = NULL;
+            report_containment(folder, FALSE, reason);
+        } else {
+            report_containment(folder, TRUE, 0);
+        }
+    } else {
+        report_containment(folder, FALSE, GetLastError());
+    }
     TAKEOVER_PROCESS message = {app.dwProcessId, app.dwThreadId, process_birth(app.hProcess)};
     DWORD transferred;
     BYTE go = 0;
@@ -551,14 +617,20 @@ DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD 
         transferred == sizeof(message) && ReadFile(pipe, &go, sizeof(go), &transferred, NULL) &&
         transferred == sizeof(go) && go == 1 && ResumeThread(app.hThread) == 1 &&
         WriteFile(pipe, &go, sizeof(go), &transferred, NULL) && transferred == sizeof(go))
-        error = supervise_processes(state, pipe, app.hProcess, folder);
+        error = supervise_processes(state, pipe, app.hProcess, job, folder);
 done:
     if (app.hProcess) {
-        if (error)
-            TerminateProcess(app.hProcess, 1);
+        if (error) {
+            if (job)
+                TerminateJobObject(job, 1);
+            else
+                terminate_tree(app.hProcess);
+        }
         CloseHandle(app.hProcess);
         CloseHandle(app.hThread);
     }
+    if (job)
+        CloseHandle(job);
     CloseHandle(pipe);
     return error;
 }

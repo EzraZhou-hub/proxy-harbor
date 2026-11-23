@@ -4,9 +4,9 @@
   "claudeDesktop": true,
   "claudeTakeover": true,
   "quarantined": false,
-  "scope": "Windows x64 1.1.2 official Claude Desktop MSIX takeover under the current Windows user. Since 1.1.2 the supervisor admits every descendant that shares the session user SID, because Claude Code mode starts its own CLI, git, wsl and shells; those descendants follow the user's TUN/global proxy path while the client image alone stays bound to the explicit proxy by WFP. A child outside the session user or a component-capacity overflow still ends the session. Admitted and blocked images are recorded per session. The 1.1.1 sandbox lifecycle evidence predates this child policy; the Code-mode fix itself is compiled and unit-tested and awaits the user's own signed-in run. Broader historical P0 acceptance is pending.",
+  "scope": "Windows x64 1.1.3 official Claude Desktop MSIX takeover under the current Windows user. Since 1.1.3 the worker no longer attaches a debugger to the process tree: Claude is created suspended, assigned to a kill-on-close job, verified, then resumed, so Code-mode commands run natively. Descendants inherit the user's TUN/global proxy path while the client image alone stays bound to the explicit proxy by WFP. If the job cannot be created or nested, the worker falls back to terminating the root and its linked descendants and records the fallback in takeover-containment.json. Exit probing, TUN checks and WFP rules are unchanged. The fixed-exit check and same-user admission were validated on 1.1.2; the job supervision itself is compiled, unit-tested and covered by a standalone job containment check, and awaits the user's own signed-in run. Broader historical P0 acceptance is pending.",
   "evidenceBundle": "20261119-100132-e97dab",
-  "guardianSha256": "237983dc2010f3ad604534c7438e775a16e99b2a30aae9f80ee504a4df4fb7e6",
+  "guardianSha256": "7474743faa0b6a4cb4dfa540f7df342fd189f16cf6b70951d85b482dc1d0aac6",
   "sourceHashes": [
     {
       "path": "native/session/guardian.c",
@@ -46,7 +46,7 @@
     },
     {
       "path": "native/session/claude_takeover.c",
-      "sha256": "54ef601297e7c7d229f3b10b306413a3bcd701be6475629399132ce9e4672eeb"
+      "sha256": "783c2969012ebef20a31d45109fd577b6833ee8ed41daf69c20f5f3599f2f62b"
     },
     {
       "path": "native/session/claude_takeover.h",
@@ -61,6 +61,6 @@
       "sha256": "c496f7ec7775b3f06647f61be484a096bafe1796c15f2558df26e25f3d8dfe11"
     }
   ],
-  "verification": "compile_and_unit_only_code_mode_child_policy",
+  "verification": "compile_unit_and_standalone_job_containment",
   "releaseEvidence": ".local/p0/sandbox/20261119-100132-e97dab/results/takeover-release-evidence.json"
 }
