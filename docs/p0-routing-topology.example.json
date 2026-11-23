@@ -1,0 +1,12 @@
+{
+  "selectedTag": "proxy",
+  "defaultTag": "proxy",
+  "selectedProtocol": "vless",
+  "chained": false,
+  "domainStrategy": "AsIs",
+  "routes": [],
+  "dns": {
+    "disableFallback": true,
+    "servers": ["https://1.1.1.1/dns-query"]
+  }
+}

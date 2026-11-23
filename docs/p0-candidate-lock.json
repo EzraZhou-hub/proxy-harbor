@@ -1,0 +1,59 @@
+{
+  "repository": "https://github.com/InterceptSuite/ProxyBridge",
+  "commit": "cb897b017a88a142ec803c3af138b0ad75c2ae12",
+  "license": "MIT",
+  "auditOnly": true,
+  "integrated": false,
+  "files": [
+    {
+      "path": "LICENSE",
+      "gitBlob": "e60d2d300df590d4b67f0a2b2ce1688938403b1c",
+      "sha256": "525ad01340fd97de6bef499c80f730aed28042d5387b2460f6626184ccb688cb"
+    },
+    {
+      "path": "Windows/README.md",
+      "gitBlob": "d019dbba49e8f48a5e9a0258c32f1ede3dc3d104",
+      "sha256": "22c71a68463edff959c9e69c94a621c57e47bc603fdd218acba3a26eb25fcf1a"
+    },
+    {
+      "path": "Windows/compile.ps1",
+      "gitBlob": "bddfda57d5285cc2e5283452f51deb3d8efcc3aa",
+      "sha256": "89067739ef7303b8a69bec0404ab934c8381252362e236b686df5d574d63cd84"
+    },
+    {
+      "path": "Windows/src/ProxyBridge.c",
+      "gitBlob": "3f3c43d9eaf40217f467d6359682ecb5ee7b66fe",
+      "sha256": "80d9bc2089e9d5be6d2bcdc8a8179ca173a44d5708c333fe2c64b61cbf7f0ab2"
+    },
+    {
+      "path": "Windows/src/ProxyBridge.h",
+      "gitBlob": "00b46de61d87b54de830aad2abfe87504850f859",
+      "sha256": "85926b63f023cf90e11caab117226084baba2155e18a3930c3a62dce145eec4f"
+    },
+    {
+      "path": "Windows/src/pb_dns.c",
+      "gitBlob": "02d3f688b52aa4cbe4893db4650d0b79ac07e598",
+      "sha256": "c68f46c4cb0860ec24a3cd09d4430808a7b1524eae5cda96c74a0ed0131d7d93"
+    },
+    {
+      "path": "Windows/src/pb_http.c",
+      "gitBlob": "d4b901e4fc73968a0defd838765148d840eaf632",
+      "sha256": "7d7549bdc9399564c2049b825e86a80d04dec5f4d404199a835ba3640af1e4db"
+    },
+    {
+      "path": "Windows/src/pb_internal.h",
+      "gitBlob": "ce8a8e96472b7d2cdd01b7257c50fe954528baa4",
+      "sha256": "41f3c10a77a137f60ce772b74d3599f7397d01b716714d5cd1f2cb642ab38066"
+    },
+    {
+      "path": "Windows/src/pb_proxy.c",
+      "gitBlob": "cdccb72ccfd6268070a85209303c8b2a9de7c41a",
+      "sha256": "703df35cb488a91cc82d06574730c597a41ffd99b1b8a152fec58c3104e93a9c"
+    },
+    {
+      "path": "Windows/src/pb_rules.c",
+      "gitBlob": "ad50e413a602f036d55819929ea3d8b6a319e58e",
+      "sha256": "145104c7c2d5cac11cf059c6d186cd3632f7e7c656af27c64c9fb3953682c2f6"
+    }
+  ]
+}

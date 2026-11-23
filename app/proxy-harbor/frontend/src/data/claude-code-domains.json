@@ -1,0 +1,27 @@
+{
+  "sourceDocument": "Claude_Code_域名清单.md",
+  "sourceUrl": "https://ip.net.coffee/claude/site.html",
+  "extractedOn": "2026-11-16",
+  "groups": [
+    { "name": "核心域名", "domains": [
+      "anthropic.com", "claude.ai", "claude.com", "clau.de", "claudemcpclient.com",
+      "claudemcpcontent.com", "claudeusercontent.com"
+    ] },
+    { "name": "CDN 与基础设施", "domains": [
+      "cdn.anthropic.com", "anthropic.com.cdn.cloudflare.net", "servd-anthropic-website.b-cdn.net"
+    ] },
+    { "name": "认证、内容及其他 Anthropic 子域名", "domains": [
+      "anthropic.auth0.com", "anthropic-com.ghost.io", "mcp.anthropic.com",
+      "console.anthropic.com", "workbench.anthropic.com"
+    ] },
+    { "name": "KYC 身份验证", "domains": [
+      "maps.googleapis.com", "withpersona.com", "frompersona.com"
+    ] },
+    { "name": "监控和遥测", "domains": [
+      "sentry.io", "statsigapi.net", "browser-intake-us5-datadoghq.com"
+    ] },
+    { "name": "客服及第三方", "domains": [
+      "intercom.io", "intercomcdn.com", "cdn.usefathom.com"
+    ] }
+  ]
+}

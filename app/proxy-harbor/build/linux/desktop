@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Proxy Harbor
+Comment=应用专属代理启动器
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/proxy-harbor.exe %u
+Terminal=false
+Type=Application
+Icon=proxy-harbor.exe
+Categories=Utility;
+StartupWMClass=proxy-harbor.exe
+
+ 
