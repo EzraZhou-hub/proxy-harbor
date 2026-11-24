@@ -101,6 +101,7 @@ Section
     !insertmacro wails.setShellContext
     IfFileExists "$INSTDIR\proxy-harbor-session-inventory.exe" 0 +2
     Call CheckIdle
+    Call CheckRunning
 
     !insertmacro wails.webview2runtime
 
@@ -123,19 +124,45 @@ Function CheckIdle
     !insertmacro PROXY_HARBOR_REQUIRE_IDLE
 FunctionEnd
 
+# The program keeps running in the notification area after its window is
+# closed, and a running image cannot be replaced. Probe the executable for
+# write access and close the resident process after confirmation.
+Function CheckRunning
+    IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 done
+    ClearErrors
+    FileOpen $9 "$INSTDIR\${PRODUCT_EXECUTABLE}" a
+    ${If} ${Errors}
+        MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Proxy Harbor 仍在后台托盘运行，安装程序需要先关闭它才能继续。$\r$\n$\r$\n是否立即关闭？" IDOK close IDCANCEL abort
+        abort:
+            SetErrorLevel 5
+            Abort
+        close:
+            nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}"'
+            Pop $0
+            Pop $1
+            Sleep 1500
+    ${Else}
+        FileClose $9
+    ${EndIf}
+    done:
+FunctionEnd
+
 Section "uninstall" 
     !insertmacro wails.setShellContext
 
     !insertmacro PROXY_HARBOR_REQUIRE_IDLE
+    Call un.CheckRunning
     ClearErrors
     Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
     ${If} ${Errors}
-        MessageBox MB_ICONSTOP "请先关闭 Proxy Harbor，然后重试。" /SD IDOK
+        MessageBox MB_ICONSTOP "请先从托盘菜单退出 Proxy Harbor，然后重试。" /SD IDOK
         SetErrorLevel 4
         Abort
     ${EndIf}
     Delete "$INSTDIR\proxy-harbor-guardian.exe"
     Delete "$INSTDIR\proxy-harbor-session-inventory.exe"
+
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "proxy-harbor"
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
@@ -146,3 +173,23 @@ Section "uninstall"
     !insertmacro wails.deleteUninstaller
     RMDir "$INSTDIR"
 SectionEnd
+
+Function un.CheckRunning
+    IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 done
+    ClearErrors
+    FileOpen $9 "$INSTDIR\${PRODUCT_EXECUTABLE}" a
+    ${If} ${Errors}
+        MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Proxy Harbor 仍在后台托盘运行，卸载程序需要先关闭它才能继续。$\r$\n$\r$\n是否立即关闭？" IDOK close IDCANCEL abort
+        abort:
+            SetErrorLevel 5
+            Abort
+        close:
+            nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}"'
+            Pop $0
+            Pop $1
+            Sleep 1500
+    ${Else}
+        FileClose $9
+    ${EndIf}
+    done:
+FunctionEnd

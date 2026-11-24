@@ -180,6 +180,16 @@ func (r *Runtime) Status() domain.ManagedSession {
 	return r.statusLocked()
 }
 
+// Refresh re-reads the session inventory before reporting. Long-lived callers
+// such as the notification-area menu must not cache the directory chosen at
+// construction time, because sessions are started by the desktop bindings.
+func (r *Runtime) Refresh() domain.ManagedSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.selectSession()
+	return r.statusLocked()
+}
+
 func CollectImages(appID, executable string) ([]string, error) {
 	expected := map[string]string{"chrome": "chrome.exe", "codex": "codex.exe"}[appID]
 	if expected == "" || !strings.EqualFold(filepath.Base(executable), expected) {

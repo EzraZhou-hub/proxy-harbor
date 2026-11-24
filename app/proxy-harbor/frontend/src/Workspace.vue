@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { Events } from '@wailsio/runtime'
 import Icon from './components/AppIcon.vue'
 import DomainReference from './components/DomainReference.vue'
 import { backend, type Snapshot, type ProxyProfile, type ManagedSession } from './api'
@@ -114,11 +115,19 @@ async function refreshManaged() {
  }
 }
 async function pollManaged() {
- if (managedBusy.value || pollInProgress) return
+ if (pollingPaused.value || managedBusy.value || pollInProgress) return
  pollInProgress = true
  try { await refreshManaged() }
  finally { pollInProgress = false }
 }
+// 窗口收起到托盘后停止每秒轮询，重新显示时立即补一次，避免后台空转。
+function applyWindowVisibility(visible: boolean) {
+ const paused = !visible
+ if (pollingPaused.value === paused) return
+ pollingPaused.value = paused
+ if (visible) void pollManaged()
+}
+function onDocumentVisibility() { applyWindowVisibility(document.visibilityState !== 'hidden') }
 async function managedAction(kind: SessionAction, action: () => Promise<ManagedSession>) {
  if (managedBusy.value) return
  ++statusRead
@@ -132,6 +141,8 @@ async function managedAction(kind: SessionAction, action: () => Promise<ManagedS
  finally { await refreshManaged(); managedBusy.value = null }
 }
 const loading = ref(true), busy = ref(false), error = ref(''), notice = ref(''), dialog = ref(false)
+const pollingPaused = ref(false)
+let stopTrayEvents: (() => void) | undefined
 const formName = ref<HTMLInputElement | null>(null)
 const form = reactive<ProxyProfile>({ id: '', name: '', protocol: 'http', host: '', port: 7890 })
 const paths = reactive<Record<string, string>>({})
@@ -243,8 +254,14 @@ onMounted(() => {
  void pollManaged()
  backend.CookieCleanupAvailable().then(value => { cookieToolsAvailable.value = value }, () => {})
  statusTimer = setInterval(pollManaged, 1000)
+ stopTrayEvents = Events.On('tray:visibility', event => applyWindowVisibility(event.data !== false))
+ document.addEventListener('visibilitychange', onDocumentVisibility)
 })
-onUnmounted(() => { if (statusTimer) clearInterval(statusTimer) })
+onUnmounted(() => {
+ if (statusTimer) clearInterval(statusTimer)
+ stopTrayEvents?.()
+ document.removeEventListener('visibilitychange', onDocumentVisibility)
+})
 </script>
 
 <template>
@@ -368,6 +385,7 @@ onUnmounted(() => { if (statusTimer) clearInterval(statusTimer) })
         <p v-else>由 Windows 自动识别官方 x64 安装。受管窗口使用临时 Windows 账户，请在其中登录 Claude。</p>
        </div></li>
        <li><Icon name="proxy" /><div><strong>固定代理出口</strong><p>沿用 v2rayN 全局和 TUN，绑定指定代理入口并核对公网 IPv4。</p></div></li>
+       <li><Icon name="apps" /><div><strong>关闭窗口不中断保护</strong><p>点击窗口关闭按钮只会把 Proxy Harbor 收起到托盘，守护程序和受保护的会话继续运行；需要彻底退出时，请用托盘菜单的「退出 Proxy Harbor」。</p></div></li>
        <li><Icon name="globe" /><div><strong>系统 DNS 临时限制</strong><p>启动需要管理员授权。保护期间，其他程序的传统 DNS 查询也可能受影响。</p></div></li>
       </ul>
      </section>
