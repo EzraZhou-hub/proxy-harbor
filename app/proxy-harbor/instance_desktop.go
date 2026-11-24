@@ -22,6 +22,12 @@ func singleInstanceOptions(dataDir string) *application.SingleInstanceOptions {
 	return &application.SingleInstanceOptions{
 		UniqueID: fmt.Sprintf("local.proxyharbor.%x", id[:16]),
 		OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+			// The window is usually hidden in the notification area; reuse the
+			// resident path so the interface resumes its status poll.
+			if residentApp != nil {
+				residentApp.show()
+				return
+			}
 			if window, ok := application.Get().Window.GetByName("main"); ok {
 				if window.IsMinimised() {
 					window.UnMinimise()

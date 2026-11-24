@@ -1,5 +1,7 @@
 # 当前需求与实现范围
 
+2026-11-24 托盘常驻（1.2.0）。用户要求安装后长时间驻留：关闭页面后台不退出，隐藏到托盘。原实现中关闭窗口即退出进程，守护程序会因 `parent` 句柄失效写入 `desktop_exited` 并结束受保护会话，因此本轮只改桌面进程的生命周期，不动守护程序、WFP 规则与固定出口核验。关闭窗口改为取消销毁并隐藏，新增通知区域图标与菜单（打开主界面、状态、登录时启动、退出），退出前在会话进行中弹确认，`--tray` 支持登录静默启动；托盘状态改用新增的 `session.Runtime.Refresh()` 重新枚举会话目录；窗口隐藏时前端暂停每秒轮询。安装器增加「仍在托盘运行」检测，卸载时删除登录启动项。验证：`go vet`/`go test`、前端类型检查、4 项草稿回归、7 项界面测试、`wails3 build` 通过；真实二进制冒烟确认关闭窗口后进程存活且窗口隐藏、再次启动唤起原窗口、`--tray` 无可见窗口。安装包 `Proxy-Harbor-1.2.0-win-x64-setup.exe`（SHA-256 `229f36d7…`）由手工装配生成：`release.ps1` 的原生编译步骤因 `vcvars64.bat` 触发被本机黑名单拦截的 `reg.exe` 无法执行，守护程序与清单程序复用 1.1.3 发行件（守护 SHA-256 与指纹一致），NSIS 用 3.10 便携版按相同 defines 编译。通知区域图标与菜单的实际显示、登录启动、安装与卸载流程待用户本机确认。见 [托盘常驻](tray-residency.md)。
+
 2026-11-23 Code 模式进程监管改造（1.1.3）。1.1.2 放行同用户子进程后仍有终端命令失败，按用户要求只改进程监管、保留固定出口。Worker 由 `DEBUG_PROCESS` 调试整棵树改为 `CREATE_SUSPENDED` + Job（`KILL_ON_JOB_CLOSE`）+ 校验后恢复；结束会话改用 `TerminateJobObject`，Job 不可用时回退为终止根进程与关联后代并记录 `takeover-containment.json`；组件镜像改为每 2 秒采样。WFP 规则、固定出口核验、TUN/代理检查全部未改。守护编译、Go/前端回归、独立 Job 终止测试通过；未启动 Claude，真实 Code 模式待用户本机确认。见 [进程监管改造](claude-code-mode-supervision.md)。
 
 2026-11-23 Code 模式修复（1.1.2）。用户报告经 Proxy Harbor 打开 Claude 后 Code 模式无法正常打开，原因为接管监督终止所有镜像不是 `Claude.exe` 的子进程（退出码 5），Claude 日志同时出现 `Claude Code process exited with code 5`、`git`/`wsl.exe` 退出 5。新策略仅按会话用户 SID 约束后代并记录组件日志，已退出子进程不再误判；当前用户模式入站规则恢复回环例外。WFP 固定出口仍只覆盖 Claude.exe，后代沿用 v2rayN 全局/TUN。守护编译、Go 与前端单元回归通过，安装包为 `Proxy-Harbor-1.1.2-win-x64-setup.exe`；真实 Code 模式待用户本机确认。见 [定位与修复](claude-code-mode-fix.md)。

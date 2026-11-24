@@ -4,12 +4,13 @@ Windows x64 桌面工具，为官方 Claude Desktop 提供**固定代理出口**
 
 它在当前 Windows 账户下接管并重启 Claude Desktop，启动前核对 v2rayN 的本地代理入口、TUN 和公网 IPv4 出口，运行中持续核验；一旦代理、TUN、出口或守护程序异常，先阻断网络再结束受管进程树。
 
-当前版本：**1.1.3** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+当前版本：**1.2.0** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
 ## 功能特性
 
+- **托盘常驻**：关闭窗口只把界面收起到通知区域，程序和受保护会话继续运行；托盘菜单可打开主界面、查看会话状态、设置登录启动或彻底退出。
 - **固定出口接管**：自动识别当前账户注册的官方 Claude Desktop x64（MSIX），退出已有进程后用同一账户重新启动，沿用原有配置和登录状态。
 - **启动前核验**：确认 `127.0.0.1:10808` 由 v2rayN 内核监听、TUN 默认路由生效、经代理观测的公网 IPv4 与保存值一致，任一不符则拒绝启动。
 - **运行中核验**：约每 10 秒经指定代理查询公网 IPv4；出口变化、查询失败、代理进程退出、TUN 路由改变、WFP 规则被修改都会触发断开。
@@ -21,7 +22,7 @@ Windows x64 桌面工具，为官方 Claude Desktop 提供**固定代理出口**
 ## 工作原理
 
 ```text
-Proxy Harbor（普通权限）
+Proxy Harbor（普通权限，常驻通知区域）
    └─ 管理员授权 ──> proxy-harbor-guardian.exe（守护程序）
                         ├─ 核对 v2rayN 监听进程、TUN、公网 IPv4
                         ├─ 安装 WFP 规则 + 临时限制系统传统 DNS
@@ -29,6 +30,8 @@ Proxy Harbor（普通权限）
                         ├─ 周期核验出口 / 规则 / TUN / 代理进程
                         └─ 异常：紧急阻断 → 结束进程树 → 保留恢复记录
 ```
+
+守护程序把受管会话绑定在桌面进程上：桌面进程退出即判定为 `desktop_exited`，会结束受保护的应用并清理规则。因此关闭窗口时程序改为隐藏到托盘，而不是退出。
 
 Claude 的流量路径：`Claude.exe → 127.0.0.1:10808（v2rayN）→ 远程节点 → 目标`。
 
@@ -42,13 +45,13 @@ Claude 的流量路径：`Claude.exe → 127.0.0.1:10808（v2rayN）→ 远程�
 
 ## 安装
 
-1. 运行 `app\proxy-harbor\bin\release-1.1.3\Proxy-Harbor-1.1.3-win-x64-setup.exe`。
+1. 运行 `app\proxy-harbor\bin\release-1.2.0\Proxy-Harbor-1.2.0-win-x64-setup.exe`。
 2. 安装到 `C:\Program Files\Proxy Harbor`，从开始菜单以**普通权限**打开 Proxy Harbor。
 3. 安装器未签名；发行目录提供同名 `.sha256`，可用 `Get-FileHash` 校验：
 
 ```powershell
-Get-FileHash .\Proxy-Harbor-1.1.3-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\Proxy-Harbor-1.1.3-win-x64-setup.exe.sha256
+Get-FileHash .\Proxy-Harbor-1.2.0-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\Proxy-Harbor-1.2.0-win-x64-setup.exe.sha256
 ```
 
 ## 使用方法
@@ -73,7 +76,14 @@ Get-Content .\Proxy-Harbor-1.1.3-win-x64-setup.exe.sha256
 - 正常结束：点击「结束 Claude 会话」，等待状态显示「已停止」，规则和 DNS 限制会自动清理。
 - 异常或残留：状态显示「需要恢复」时，点击「核对并恢复限制」并按提示授权。
 
-### 4. Chrome 本机验证（可选）
+### 4. 托盘与退出
+
+- 点击窗口右上角的关闭按钮**不会退出程序**：界面收起到通知区域，守护程序与受保护会话继续运行，托盘提示会显示当前状态（保护中会带出口 IPv4）。
+- 左键单击托盘图标恢复主界面；右键打开菜单，可查看状态、勾选「登录时启动（最小化到托盘）」或「退出 Proxy Harbor」。
+- 彻底退出必须走托盘菜单「退出 Proxy Harbor」。如果此时有会话正在保护，程序会先弹出确认，说明退出会结束受保护的应用；默认选项是「继续保护」。
+- 从开始菜单再次打开程序时，已隐藏的窗口会被唤到前台，不会启动第二个进程。
+
+### 5. Chrome 本机验证（可选）
 
 1. 在「应用管理」核对 Google Chrome 路径。
 2. 保存工作并完全退出已有 Chrome。
@@ -95,6 +105,8 @@ Claude Desktop 的 Code / Cowork 会启动不同镜像的子程序（`cowork-svc
 ## 保护范围与已知限制
 
 - 保护对象是 Proxy Harbor 启动的 Claude 窗口及其受管进程，不覆盖系统中其他程序。
+- 窗口收起托盘时保护继续；但用任务管理器结束 `proxy-harbor.exe` 等价于桌面进程退出，守护程序会结束会话并清理规则。
+- 只有勾选托盘菜单的「登录时启动」才会写入 `HKCU\…\CurrentVersion\Run`，默认不写、不会自行开机运行。
 - 会话期间全机传统 DNS 查询会被临时限制，其他应用解析域名可能受影响。
 - 外部浏览器回调（OAuth 等）和 Cowork 未纳入本轮验收。
 - 守护程序以管理员权限运行，但只操作本会话拥有的 WFP 规则、临时 DNS 限制和会话记录；不读取 v2rayN 节点配置或凭据，不修改系统代理设置。
@@ -114,8 +126,8 @@ Claude Desktop 的 Code / Cowork 会启动不同镜像的子程序（`cowork-svc
 
 ## 升级与卸载
 
-- **升级**：先「结束 Claude 会话」并完全退出 Proxy Harbor，再运行新版本安装包原地覆盖；配置和历史记录保留。
-- **卸载**：同样要求没有进行中的会话；卸载不会删除 `%APPDATA%\ProxyHarbor` 中的配置。
+- **升级**：先「结束 Claude 会话」，再运行新版本安装包原地覆盖；配置和历史记录保留。程序此时通常还在托盘运行，安装程序会提示「Proxy Harbor 仍在后台托盘运行」，确认后自动关闭再继续；取消则中止安装。
+- **卸载**：同样要求没有进行中的会话；卸载会先关闭托盘进程、删除登录启动项，但不会删除 `%APPDATA%\ProxyHarbor` 中的配置。
 - 覆盖安装或卸载前若有遗留会话，安装程序会拒绝并提示先停止或恢复。
 
 ## 从源码构建
@@ -149,6 +161,7 @@ $env:GOPROXY = 'https://goproxy.cn'
 ```text
 app/proxy-harbor/
   main.go                    桌面入口与依赖装配
+  tray_desktop.go            托盘常驻、关闭即隐藏、退出确认、登录启动
   internal/domain/           配置、状态、校验
   internal/core/             配置操作与启动保护边界
   internal/session/          会话生命周期、守护指纹准入
@@ -163,6 +176,12 @@ docs/                        需求、设计与验收记录
 ```
 
 ## 常见问题
+
+**关闭窗口后程序去哪了？怎么彻底退出？**
+窗口收起到通知区域，程序还在运行（托盘图标悬停可看到当前状态）。右键托盘图标 →「退出 Proxy Harbor」。若正在保护会话，会先确认，避免顺手退出把 Claude 一起结束。
+
+**托盘图标不见了 / 找不到程序**
+图标可能被折叠进任务栏的「显示隐藏的图标」。也可以从开始菜单重新打开 Proxy Harbor，窗口会被唤到前台。
 
 **「缺少匹配的守护程序，请核对桌面构建」**
 `proxy-harbor.exe` 内嵌的守护指纹与实际 `proxy-harbor-guardian.exe` 不一致。通常是只替换了其中一个文件，或用了不同版本的文件，重装同一版本安装包即可。
@@ -182,6 +201,7 @@ docs/                        需求、设计与验收记录
 ## 文档
 
 - [当前需求与实现范围](docs/current-requirements.md)
+- [托盘常驻与关闭即收起（1.2.0）](docs/tray-residency.md)
 - [Code 模式子进程问题定位与修复](docs/claude-code-mode-fix.md)
 - [Code 模式进程监管改造（1.1.3）](docs/claude-code-mode-supervision.md)
 - [守护程序会话验收记录](docs/p0-session-acceptance.md)
@@ -190,7 +210,7 @@ docs/                        需求、设计与验收记录
 
 ## 状态说明
 
-Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在 1.1.1/1.1.2 的受控环境验证；1.1.3 的 Job 托管改动通过编译、Go 与前端回归以及独立 Job 终止测试，真实 Code 模式与出口核验仍需本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
+Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在 1.1.1/1.1.2 的受控环境验证；1.1.3 的 Job 托管改动通过编译、Go 与前端回归以及独立 Job 终止测试，真实 Code 模式与出口核验仍需本机确认。1.2.0 的托盘常驻在本机验证了「关闭窗口进程存活、再次启动唤起窗口、`--tray` 静默启动」，发行包已生成为 `bin\release-1.2.0\Proxy-Harbor-1.2.0-win-x64-setup.exe`；通知区域图标与菜单的实际显示、登录启动项、安装与卸载流程仍需本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
 
 ## 许可证
 

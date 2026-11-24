@@ -131,3 +131,23 @@ func TestProxyExitMustBeIndependentPublicIPv4(t *testing.T) {
 		t.Fatal("Expected a valid IP")
 	}
 }
+
+func TestRefreshSeesSessionsCreatedAfterStartup(t *testing.T) {
+	base := t.TempDir()
+	r := New(base)
+	if state := r.Status(); state.State != "idle" || state.Directory != "" {
+		t.Fatalf("Unexpected initial state: %+v", state)
+	}
+	dir := filepath.Join(base, "sessions", "33333333-3333-3333-3333-333333333333")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status.json"), []byte(`{"state":"stopped","reason":"user_stopped","filterCount":0}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A resident caller must observe sessions started by the desktop bindings
+	// after it was constructed, without restarting the process.
+	if state := r.Refresh(); state.Directory != dir || state.State != "stopped" {
+		t.Fatalf("Refresh missed the new session: %+v", state)
+	}
+}
