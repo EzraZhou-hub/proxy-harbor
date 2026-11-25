@@ -28,6 +28,14 @@ static CLAUDE_TAKEOVER takeover;
 
 #define MAX_IMAGES 64
 #define BASE_RULES 6
+#define MAX_CONDITIONS 4
+// The client image may reach loopback for local preview servers and MCP
+// bridges. Neither address leaves the host, so the explicit proxy still owns
+// every off-host path. IPv6 needs explicit entries because localhost can
+// resolve to ::1 before 127.0.0.1.
+static FWP_BYTE_ARRAY16 loopback_v6 = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}};
+static FWP_BYTE_ARRAY16 mapped_loopback_v6 = {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0x7f, 0, 0, 1}};
 static const wchar_t owner[] = L"Proxy Harbor managed session v1";
 static wchar_t directory[1024], images[MAX_IMAGES][1024], mode[32];
 static GUID session_id;
@@ -57,7 +65,7 @@ static UINT32 previous_events;
 static FILETIME began;
 static char observed_exit[64], expected_exit[16];
 static volatile LONG64 last_exit_check;
-static char blocked_at[32], block_direction[12];
+static char blocked_at[32], block_direction[12], blocked_remote[64];
 static UINT64 blocked_filter;
 static unsigned blocked_protocol, blocked_remote_port;
 static HANDLE stop_checks, exit_thread, exit_alarm;
@@ -107,6 +115,7 @@ static void status(const char *state, const char *reason) {
               "\"blockedAt\":\"%s\",\"blockedFilterId\":\"%llu\","
               "\"blockDirection\":\"%s\","
               "\"blockedProtocol\":%u,\"blockedRemotePort\":%u,"
+              "\"blockedRemoteAddress\":\"%s\","
               "\"unexpectedPeerPid\":%lu,\"unexpectedPeerFamily\":%u,"
               "\"unexpectedPeerPort\":%u,\"jobQueryRetries\":%lu,"
               "\"updatedAt\":\"%04u-%02u-%02uT%02u:%"
@@ -116,6 +125,7 @@ static void status(const char *state, const char *reason) {
               creation(GetCurrentProcess()), GetCurrentThreadId(), installed + dns_guard.count,
               observed_exit, tun_index, blocked_at, blocked_filter,
               block_direction, blocked_protocol, blocked_remote_port,
+              blocked_remote[0] ? blocked_remote : "unknown",
               unexpected_peer.pid, unexpected_peer.family, unexpected_peer.remote_port,
               SessionJobQueryRetries(), now.wYear,
               now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
@@ -297,6 +307,11 @@ static BOOL equal_condition(const FWPM_FILTER_CONDITION0 *a,
         return a->conditionValue.uint16 == b->conditionValue.uint16;
     if (a->conditionValue.type == FWP_UINT8)
         return a->conditionValue.uint8 == b->conditionValue.uint8;
+    if (a->conditionValue.type == FWP_BYTE_ARRAY16_TYPE) {
+        FWP_BYTE_ARRAY16 *x = a->conditionValue.byteArray16,
+                         *y = b->conditionValue.byteArray16;
+        return x && y && !memcmp(x->byteArray16, y->byteArray16, 16);
+    }
     if (a->conditionValue.type == FWP_BYTE_BLOB_TYPE ||
         a->conditionValue.type == FWP_SECURITY_DESCRIPTOR_TYPE) {
         FWP_BYTE_BLOB *x = a->conditionValue.byteBlob,
@@ -307,9 +322,9 @@ static BOOL equal_condition(const FWPM_FILTER_CONDITION0 *a,
     return FALSE;
 }
 static void make_filter(unsigned image, unsigned rule, FWPM_FILTER0 *filter,
-                        FWPM_FILTER_CONDITION0 conditions[3]) {
+                        FWPM_FILTER_CONDITION0 conditions[MAX_CONDITIONS]) {
     ZeroMemory(filter, sizeof(*filter));
-    ZeroMemory(conditions, 3 * sizeof(*conditions));
+    ZeroMemory(conditions, MAX_CONDITIONS * sizeof(*conditions));
     filter->filterKey = key_for(image, rule);
     filter->subLayerKey = session_id;
     filter->layerKey = (rule == 3 || rule == 5 || rule == 7)
@@ -326,8 +341,8 @@ static void make_filter(unsigned image, unsigned rule, FWPM_FILTER0 *filter,
     filter->weight.uint8 = 15;
     filter->providerData.data = (BYTE *)&session_id;
     filter->providerData.size = sizeof(session_id);
-    filter->numFilterConditions = (rule < 3 || rule == 4) ? 2 : 1;
     filter->filterCondition = conditions;
+    unsigned count = 1;
     conditions[0].fieldKey = FWPM_CONDITION_ALE_APP_ID;
     conditions[0].matchType = FWP_MATCH_EQUAL;
     conditions[0].conditionValue.type = FWP_BYTE_BLOB_TYPE;
@@ -336,25 +351,51 @@ static void make_filter(unsigned image, unsigned rule, FWPM_FILTER0 *filter,
         conditions[0].fieldKey = FWPM_CONDITION_ALE_USER_ID;
         conditions[0].conditionValue.type = FWP_SECURITY_DESCRIPTOR_TYPE;
         conditions[0].conditionValue.sd = &account_security;
-        if (rule == 4)
-            filter->numFilterConditions = 1;
     }
-    conditions[1].matchType = FWP_MATCH_NOT_EQUAL;
-    if (rule == 0 || rule == 4) {
-        conditions[1].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
-        conditions[1].conditionValue.type = FWP_UINT32;
-        conditions[1].conditionValue.uint32 = 0x7f000001;
+    if ((rule == 0 || rule == 4) &&
+        !(rule == 4 && user_identity && !current_user)) {
+        conditions[count].matchType = FWP_MATCH_NOT_EQUAL;
+        conditions[count].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+        conditions[count].conditionValue.type = FWP_UINT32;
+        conditions[count].conditionValue.uint32 = 0x7f000001;
+        ++count;
     }
     if (rule == 1) {
-        conditions[1].fieldKey = FWPM_CONDITION_IP_PROTOCOL;
-        conditions[1].conditionValue.type = FWP_UINT8;
-        conditions[1].conditionValue.uint8 = 6;
+        conditions[count].matchType = FWP_MATCH_NOT_EQUAL;
+        conditions[count].fieldKey = FWPM_CONDITION_IP_PROTOCOL;
+        conditions[count].conditionValue.type = FWP_UINT8;
+        conditions[count].conditionValue.uint8 = 6;
+        ++count;
     }
     if (rule == 2) {
-        conditions[1].fieldKey = FWPM_CONDITION_IP_REMOTE_PORT;
-        conditions[1].conditionValue.type = FWP_UINT16;
-        conditions[1].conditionValue.uint16 = (UINT16)proxy_port;
+        conditions[count].matchType = FWP_MATCH_NOT_EQUAL;
+        conditions[count].fieldKey = FWPM_CONDITION_IP_REMOTE_PORT;
+        conditions[count].conditionValue.type = FWP_UINT16;
+        conditions[count].conditionValue.uint16 = (UINT16)proxy_port;
+        ++count;
+        // Loopback targets are local preview servers or MCP bridges. They
+        // never leave the host, so requiring the proxy port here only broke
+        // the client's own local preview.
+        conditions[count].matchType = FWP_MATCH_NOT_EQUAL;
+        conditions[count].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+        conditions[count].conditionValue.type = FWP_UINT32;
+        conditions[count].conditionValue.uint32 = 0x7f000001;
+        ++count;
     }
+    if (rule == 3) {
+        // localhost may resolve to ::1 first; block every other IPv6 target.
+        conditions[count].matchType = FWP_MATCH_NOT_EQUAL;
+        conditions[count].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+        conditions[count].conditionValue.type = FWP_BYTE_ARRAY16_TYPE;
+        conditions[count].conditionValue.byteArray16 = &loopback_v6;
+        ++count;
+        conditions[count].matchType = FWP_MATCH_NOT_EQUAL;
+        conditions[count].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+        conditions[count].conditionValue.type = FWP_BYTE_ARRAY16_TYPE;
+        conditions[count].conditionValue.byteArray16 = &mapped_loopback_v6;
+        ++count;
+    }
+    filter->numFilterConditions = count;
     if (current_user) {
         // Match both the installed image and the Windows user's SID. Inbound
         // connections from outside loopback are blocked; the client's local
@@ -368,7 +409,7 @@ static void make_filter(unsigned image, unsigned rule, FWPM_FILTER0 *filter,
 }
 static BOOL owned(const FWPM_FILTER0 *actual, unsigned image, unsigned rule) {
     FWPM_FILTER0 expected;
-    FWPM_FILTER_CONDITION0 conditions[3];
+    FWPM_FILTER_CONDITION0 conditions[MAX_CONDITIONS];
     make_filter(image, rule, &expected, conditions);
     if (!IsEqualGUID(&actual->filterKey, &expected.filterKey) ||
         !IsEqualGUID(&actual->layerKey, &expected.layerKey) ||
@@ -475,7 +516,7 @@ static DWORD install(BOOL block_all) {
     for (unsigned i = 0; !e && i < image_count; ++i)
         for (unsigned r = start; !e && r < end; ++r) {
             FWPM_FILTER0 f;
-            FWPM_FILTER_CONDITION0 c[3];
+            FWPM_FILTER_CONDITION0 c[MAX_CONDITIONS];
             make_filter(i, r, &f, c);
             e = FwpmFilterAdd0(engine, &f, NULL, &filter_ids[i * 8 + r]);
         }
@@ -971,6 +1012,26 @@ static int blocked_event(void) {
                         blocked_filter = event->classifyDrop->filterId;
                         strcpy_s(block_direction, sizeof(block_direction),
                                  rule >= 4 ? "inbound" : "outbound");
+                        blocked_remote[0] = 0;
+                        if ((event->header.flags &
+                             FWPM_NET_EVENT_FLAG_REMOTE_ADDR_SET) &&
+                            (event->header.flags &
+                             FWPM_NET_EVENT_FLAG_IP_VERSION_SET)) {
+                            if (event->header.ipVersion == FWP_IP_VERSION_V6)
+                                inet_ntop(AF_INET6,
+                                          event->header.remoteAddrV6.byteArray16,
+                                          blocked_remote,
+                                          sizeof(blocked_remote));
+                            else if (event->header.ipVersion ==
+                                     FWP_IP_VERSION_V4) {
+                                UINT32 address = event->header.remoteAddrV4;
+                                sprintf_s(blocked_remote, sizeof(blocked_remote),
+                                          "%u.%u.%u.%u", (address >> 24) & 0xffu,
+                                          (address >> 16) & 0xffu,
+                                          (address >> 8) & 0xffu,
+                                          address & 0xffu);
+                            }
+                        }
                         if (event->header.flags &
                             FWPM_NET_EVENT_FLAG_IP_PROTOCOL_SET)
                             blocked_protocol = event->header.ipProtocol;
