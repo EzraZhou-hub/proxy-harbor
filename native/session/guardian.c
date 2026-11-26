@@ -70,7 +70,7 @@ static UINT64 blocked_filter;
 static unsigned blocked_protocol, blocked_remote_port;
 static HANDLE stop_checks, exit_thread, exit_alarm;
 enum exit_fault { EXIT_HEALTHY, EXIT_MISMATCH, EXIT_UNVERIFIED };
-static volatile LONG exit_fault;
+static volatile LONG exit_fault, exit_failures;
 static SESSION_TCP_PEER unexpected_peer;
 static DWORD network_error;
 static BOOL diagnostics_pending;
@@ -103,9 +103,22 @@ static BOOL write_file(const wchar_t *leaf, const char *data) {
     CloseHandle(f);
     return ok;
 }
+static const char *exit_state(void) {
+    LONG fault = InterlockedCompareExchange(&exit_fault, 0, 0);
+    if (fault == EXIT_MISMATCH)
+        return "mismatch";
+    if (fault == EXIT_UNVERIFIED)
+        return "failed";
+    if (InterlockedCompareExchange(&exit_failures, 0, 0) > 0)
+        return "retrying";
+    return "ok";
+}
 static void status(const char *state, const char *reason) {
     char json[1024];
     SYSTEMTIME now;
+    const char *probe = exit_state();
+    unsigned long failures =
+        (unsigned long)InterlockedCompareExchange(&exit_failures, 0, 0);
     GetSystemTime(&now);
     sprintf_s(json, sizeof(json),
               "{\"state\":\"%s\",\"reason\":\"%s\",\"error\":%lu,\"pid\":%lu,"
@@ -116,6 +129,7 @@ static void status(const char *state, const char *reason) {
               "\"blockDirection\":\"%s\","
               "\"blockedProtocol\":%u,\"blockedRemotePort\":%u,"
               "\"blockedRemoteAddress\":\"%s\","
+              "\"exitState\":\"%s\",\"exitFailures\":%lu,"
               "\"unexpectedPeerPid\":%lu,\"unexpectedPeerFamily\":%u,"
               "\"unexpectedPeerPort\":%u,\"jobQueryRetries\":%lu,"
               "\"updatedAt\":\"%04u-%02u-%02uT%02u:%"
@@ -126,6 +140,7 @@ static void status(const char *state, const char *reason) {
               observed_exit, tun_index, blocked_at, blocked_filter,
               block_direction, blocked_protocol, blocked_remote_port,
               blocked_remote[0] ? blocked_remote : "unknown",
+              probe, failures,
               unexpected_peer.pid, unexpected_peer.family, unexpected_peer.remote_port,
               SessionJobQueryRetries(), now.wYear,
               now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
@@ -773,7 +788,7 @@ static BOOL ipv4_public(const char *text) {
 // Require the complete bounded response and canonical ASCII before comparing.
 static BOOL read_exit_body(HINTERNET request, char out[64]) {
     DWORD used = 0;
-    ULONGLONG deadline = GetTickCount64() + 5000;
+    ULONGLONG deadline = GetTickCount64() + 3000;
     while (used <= 15 && GetTickCount64() < deadline) {
         DWORD n = 0;
         if (!WinHttpReadData(request, out + used, 16 - used, &n))
@@ -789,7 +804,8 @@ static BOOL read_exit_body(HINTERNET request, char out[64]) {
     SetLastError(ERROR_INVALID_DATA);
     return FALSE;
 }
-static BOOL query_exit(char out[64]) {
+static BOOL query_exit_host(const wchar_t *host, const wchar_t *path,
+                            char out[64]) {
     wchar_t proxy[64];
     swprintf_s(proxy, 64, L"127.0.0.1:%u", proxy_port);
     HINTERNET s =
@@ -799,10 +815,10 @@ static BOOL query_exit(char out[64]) {
         network_error = GetLastError();
         return FALSE;
     }
-    WinHttpSetTimeouts(s, 5000, 5000, 5000, 5000);
-    HINTERNET c = WinHttpConnect(s, L"api.ipify.org", 443, 0),
+    WinHttpSetTimeouts(s, 3000, 3000, 3000, 3000);
+    HINTERNET c = WinHttpConnect(s, host, 443, 0),
               r = c ? WinHttpOpenRequest(
-                          c, L"GET", L"/", NULL, WINHTTP_NO_REFERER,
+                          c, L"GET", path, NULL, WINHTTP_NO_REFERER,
                           WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)
                     : NULL;
     BOOL ok = FALSE;
@@ -831,6 +847,22 @@ static BOOL query_exit(char out[64]) {
     WinHttpCloseHandle(s);
     return ok;
 }
+static BOOL query_exit(char out[64]) {
+    // Keep a single slow endpoint from ending a healthy session. The first
+    // target is the historical probe; the second is a fallback. Each attempt
+    // is capped at 3s so two targets still fit inside one check period.
+    static const wchar_t *hosts[] = {L"api.ipify.org", L"ifconfig.me"};
+    static const wchar_t *paths[] = {L"/", L"/ip"};
+    DWORD first_error = 0;
+    for (unsigned i = 0; i < ARRAYSIZE(hosts); ++i) {
+        if (query_exit_host(hosts[i], paths[i], out))
+            return TRUE;
+        if (!first_error)
+            first_error = network_error;
+    }
+    network_error = first_error ? first_error : ERROR_NETWORK_UNREACHABLE;
+    return FALSE;
+}
 static BOOL exit_ok(BOOL initial) {
     if (lab) {
         if (initial)
@@ -844,12 +876,22 @@ static BOOL exit_ok(BOOL initial) {
     DWORD proxy_error = network_error;
     const char *baseline = expected_exit[0] ? expected_exit : observed_exit;
     BOOL mismatch = proxy_ok && baseline[0] && strcmp(proxy, baseline) != 0;
+    LONG failures = 0;
     if (!proxy_ok || mismatch) {
-        // Wake enforcement before any diagnostic file write or flush.
-        InterlockedExchange(&exit_fault, mismatch ? EXIT_MISMATCH : EXIT_UNVERIFIED);
-        if (exit_alarm)
-            SetEvent(exit_alarm);
+        failures = InterlockedIncrement(&exit_failures);
+        // A wrong exit address is a hard fault. During a running session a
+        // single failed probe is only recorded; a second consecutive failure
+        // still stops the session. Startup checks and exit mismatches never
+        // tolerate a failure.
+        if (initial || mismatch || failures >= 2) {
+            // Wake enforcement before any diagnostic file write or flush.
+            InterlockedExchange(&exit_fault,
+                                mismatch ? EXIT_MISMATCH : EXIT_UNVERIFIED);
+            if (exit_alarm)
+                SetEvent(exit_alarm);
+        }
     } else {
+        InterlockedExchange(&exit_failures, 0);
         InterlockedExchange64(&last_exit_check, (LONG64)GetTickCount64());
     }
     if (directory[0]) {
@@ -860,13 +902,14 @@ static BOOL exit_ok(BOOL initial) {
             result, sizeof(result),
             "{\"proxySucceeded\":%s,\"proxyError\":%lu,\"path\":"
             "\"explicit_proxy_only\",\"expected\":\"%s\",\"observed\":\"%s\","
-            "\"matchesExpected\":%s,\"checkedAt\":\"%04u-%02u-%02uT%02u:%02u:%"
+            "\"matchesExpected\":%s,\"failures\":%ld,\"checkedAt\":\"%04u-%02u-%02uT%02u:%02u:%"
             "02uZ\"}\n",
             proxy_ok ? "true" : "false", proxy_error, expected_exit,
             proxy_ok ? proxy : "",
             proxy_ok && expected_exit[0] && !strcmp(proxy, expected_exit)
                 ? "true"
                 : "false",
+            (long)failures,
             now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute,
             now.wSecond);
         if (write_file(L"exit-check.tmp", result)) {
@@ -877,8 +920,10 @@ static BOOL exit_ok(BOOL initial) {
                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
         }
     }
-    if (!proxy_ok)
-        return FALSE;
+    if (!proxy_ok) {
+        // Keep the periodic checker alive after one transient timeout.
+        return initial ? FALSE : failures < 2;
+    }
     if (mismatch) {
         network_error = ERROR_INVALID_DATA;
         return FALSE;

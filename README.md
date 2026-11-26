@@ -4,7 +4,7 @@ Windows x64 桌面工具，为官方 Claude Desktop 提供**固定代理出口**
 
 它在当前 Windows 账户下接管并重启 Claude Desktop，启动前核对 v2rayN 的本地代理入口、TUN 和公网 IPv4 出口，运行中持续核验；一旦代理、TUN、出口或守护程序异常，先阻断网络再结束受管进程树。
 
-当前版本：**1.2.1** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+当前版本：**1.2.2** · [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
@@ -45,13 +45,13 @@ Claude 的流量路径：`Claude.exe → 127.0.0.1:10808（v2rayN）→ 远程�
 
 ## 安装
 
-1. 运行 `app\proxy-harbor\bin\release-1.2.1\Proxy-Harbor-1.2.1-win-x64-setup.exe`。
+1. 运行 `app\proxy-harbor\bin\release-1.2.2\Proxy-Harbor-1.2.2-win-x64-setup.exe`。
 2. 安装到 `C:\Program Files\Proxy Harbor`，从开始菜单以**普通权限**打开 Proxy Harbor。
 3. 安装器未签名；发行目录提供同名 `.sha256`，可用 `Get-FileHash` 校验：
 
 ```powershell
-Get-FileHash .\Proxy-Harbor-1.2.1-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\Proxy-Harbor-1.2.1-win-x64-setup.exe.sha256
+Get-FileHash .\Proxy-Harbor-1.2.2-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\Proxy-Harbor-1.2.2-win-x64-setup.exe.sha256
 ```
 
 ## 使用方法
@@ -201,6 +201,7 @@ docs/                        需求、设计与验收记录
 ## 文档
 
 - [当前需求与实现范围](docs/current-requirements.md)
+- [出口核验超时容忍（1.2.2）](docs/exit-probe-tolerance.md)
 - [本地预览回环例外（1.2.1）](docs/loopback-preview-fix.md)
 - [托盘常驻与关闭即收起（1.2.0）](docs/tray-residency.md)
 - [Code 模式子进程问题定位与修复](docs/claude-code-mode-fix.md)
@@ -211,7 +212,7 @@ docs/                        需求、设计与验收记录
 
 ## 状态说明
 
-Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在 1.1.1/1.1.2 的受控环境验证；1.1.3 的 Job 托管改动通过编译、Go 与前端回归以及独立 Job 终止测试，真实 Code 模式与出口核验仍需本机确认。1.2.0 的托盘常驻在本机验证了「关闭窗口进程存活、再次启动唤起窗口、`--tray` 静默启动」，发行包已生成为 `bin\release-1.2.0\Proxy-Harbor-1.2.0-win-x64-setup.exe`；通知区域图标与菜单的实际显示、登录启动项、安装与卸载流程仍需本机确认。1.2.1 修正本地预览被误判为绕过代理的问题（`127.0.0.1`/`::1` 回环例外），守护编译、16 项条件结构测试、Go 回归与构建通过，真实受管会话中的 `preview_start` 待本机确认。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
+Claude 同账户接管、正常停止、代理/TUN 中断和守护崩溃恢复已在 1.1.1/1.1.2 的受控环境验证；1.1.3 的 Job 托管改动通过编译、Go 与前端回归以及独立 Job 终止测试，真实 Code 模式与出口核验仍需本机确认。1.2.0 的托盘常驻在本机验证了「关闭窗口进程存活、再次启动唤起窗口、`--tray` 静默启动」，发行包已生成为 `bin\release-1.2.0\Proxy-Harbor-1.2.0-win-x64-setup.exe`；通知区域图标与菜单的实际显示、登录启动项、安装与卸载流程仍需本机确认。1.2.1 修正本地预览被误判为绕过代理的问题（`127.0.0.1`/`::1` 回环例外），守护编译、16 项条件结构测试、Go 回归与构建通过，真实受管会话中的 `preview_start` 待本机确认。1.2.2 放宽了出口核验的瞬时超时（连续两次失败才终止，出口地址不匹配仍立即终止），22 项测试与构建通过，真实抖动场景待观察。更早的 P0 系统实验范围（完整 DNS/WebRTC、全部组件、跨重启等）未整体验收，相关结论以 `docs/` 中的记录为准。
 
 ## 许可证
 
