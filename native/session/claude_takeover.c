@@ -293,7 +293,7 @@ static DWORD bind_worker(CLAUDE_TAKEOVER *state, const wchar_t *folder) {
     return ERROR_SUCCESS;
 }
 
-DWORD ClaudeTakeoverPrepare(CLAUDE_TAKEOVER *state, const wchar_t *folder) {
+DWORD ClaudeTakeoverPrepare(CLAUDE_TAKEOVER *state, const wchar_t *folder, unsigned proxy_port) {
     state->prepare_stage = "create_pipe";
     wchar_t name[128], sddl[300], *sid = NULL;
     if (!pipe_name(folder, name))
@@ -323,6 +323,11 @@ DWORD ClaudeTakeoverPrepare(CLAUDE_TAKEOVER *state, const wchar_t *folder) {
     ULONG client;
     if (!error && (!GetNamedPipeClientProcessId(state->pipe, &client) || client != GetProcessId(state->launcher)))
         error = ERROR_INVALID_OWNER;
+    if (!error) {
+        state->prepare_stage = "bind_proxy_port";
+        DWORD port = proxy_port;
+        error = pipe_operation(state, PIPE_WRITE, &port, sizeof(port));
+    }
     TAKEOVER_PROCESS message = {0};
     if (!error) {
         state->prepare_stage = "read_worker";
@@ -529,7 +534,7 @@ static DWORD supervise_processes(CLAUDE_TAKEOVER *state, HANDLE pipe, HANDLE roo
     return result;
 }
 
-DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD desktop_parent) {
+DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD desktop_parent, unsigned proxy_port) {
     wchar_t name[128], journal[1200];
     if (!pipe_name(folder, name) ||
         swprintf_s(journal, ARRAYSIZE(journal), L"%ls\\takeover.bin", folder) < 0)
@@ -572,13 +577,21 @@ DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD 
             error = ERROR_INVALID_OWNER;
         goto done;
     }
+    DWORD bound_port = 0, transferred;
+    // Both sides read the request independently. Verify the port the guardian
+    // bound before constructing the suspended client's launch command.
+    if (!ReadFile(pipe, &bound_port, sizeof(bound_port), &transferred, NULL) ||
+        transferred != sizeof(bound_port) || bound_port != proxy_port) {
+        error = ERROR_INVALID_DATA;
+        goto done;
+    }
     error = ERROR_INVALID_OWNER;
     wchar_t local[1024], command[1400];
     DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, ARRAYSIZE(local));
     if (!length || length >= ARRAYSIZE(local) ||
         swprintf_s(command, ARRAYSIZE(command),
-                    L"\"%ls\\Microsoft\\WindowsApps\\claude-desktop.exe\" --proxy-server=http://127.0.0.1:10808 --proxy-bypass-list=\"<-loopback>\"",
-                    local) < 0) {
+                    L"\"%ls\\Microsoft\\WindowsApps\\claude-desktop.exe\" --proxy-server=http://127.0.0.1:%u --proxy-bypass-list=\"<-loopback>\"",
+                    local, proxy_port) < 0) {
         error = ERROR_INVALID_NAME;
         goto done;
     }
@@ -610,7 +623,6 @@ DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD 
         report_containment(folder, FALSE, GetLastError());
     }
     TAKEOVER_PROCESS message = {app.dwProcessId, app.dwThreadId, process_birth(app.hProcess)};
-    DWORD transferred;
     BYTE go = 0;
     error = ERROR_PROCESS_ABORTED;
     if (message.created && WriteFile(pipe, &message, sizeof(message), &transferred, NULL) &&

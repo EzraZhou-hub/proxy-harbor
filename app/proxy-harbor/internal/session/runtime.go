@@ -326,7 +326,7 @@ func (r *Runtime) Start(id, executable string, endpoint ProxyEndpoint) (domain.M
 	if err != nil {
 		return s, err
 	}
-	request := fmt.Sprintf("PH4\n%s\n%d\n%d\n10808\n%s\n1\n%s %d %d\n%s\n", name, os.Getpid(), created, mode, endpoint.IPv4, endpoint.PID, endpoint.Created, images[0])
+	request := fmt.Sprintf("PH4\n%s\n%d\n%d\n%d\n%s\n1\n%s %d %d\n%s\n", name, os.Getpid(), created, endpoint.Port, mode, endpoint.IPv4, endpoint.PID, endpoint.Created, images[0])
 	if err = os.WriteFile(filepath.Join(stage, "request.txt"), []byte(request), 0600); err != nil {
 		return s, err
 	}
@@ -334,7 +334,8 @@ func (r *Runtime) Start(id, executable string, endpoint ProxyEndpoint) (domain.M
 	if err = os.WriteFile(filepath.Join(stage, "session.json"), metadata, 0600); err != nil {
 		return s, err
 	}
-	initial := domain.ManagedSession{State: "preparing", Reason: "checking_proxy", UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+	initial := domain.ManagedSession{State: "preparing", Reason: "checking_proxy", UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		ExpectedProxyIPv4: endpoint.IPv4, V2rayNHTTPPort: endpoint.Port}
 	data, _ := json.Marshal(initial)
 	if err = os.WriteFile(filepath.Join(stage, "status.json"), data, 0600); err != nil {
 		return s, err
@@ -406,9 +407,9 @@ var reasonText = map[string]string{
 	"incomplete_session":                 "会话记录尚未完成清理，请核对并恢复。",
 	"invalid_status":                     "无法验证原有会话状态，请核对并恢复。",
 	"authorization_cancelled":            "管理员授权取消或守护程序未能启动，目标应用未启动。",
-	"ready":                              "沿用 v2rayN 的 HTTP 10808 入口。使用独立临时配置，启动保护需要管理员授权。",
+	"ready":                              "启动时将使用已保存的 v2rayN 本机 HTTP 入口，并请求管理员授权。",
 	"checking_proxy":                     "正在核对代理和公网出口，并准备应用的独立限制。",
-	"proxy_only":                         "受管组件仅允许连接 127.0.0.1:10808；异常时关闭本次应用进程组。",
+	"proxy_only":                         "正在监控本次会话使用的 v2rayN 本机 HTTP 入口和固定出口。",
 	"bypass_blocked":                     "WFP 记录到本次应用的受限连接并已阻断。请查看会话状态和阻断记录。",
 	"proxy_unavailable":                  "代理入口失效，已结束本次应用。",
 	"tun_not_ready":                      "没有确认 TUN 默认路由，请先开启 v2rayN TUN＋全局。",

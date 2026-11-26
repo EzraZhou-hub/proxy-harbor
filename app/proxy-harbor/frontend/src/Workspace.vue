@@ -25,8 +25,12 @@ const managed = ref<ManagedSession | null>(null)
 const managedBusy = ref<SessionAction | null>(null)
 const statusIssue = ref(false)
 const stopRequested = ref(false)
+const defaultHTTPPort = 10808
+const editingNetwork = ref(false)
 const expectedExit = ref('')
+const httpPort = ref<number | string>(defaultHTTPPort)
 const exitInput = ref<HTMLInputElement | null>(null)
+const editNetworkButton = ref<HTMLButtonElement | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let statusRead = 0
 let pollInProgress = false
@@ -57,10 +61,17 @@ const sessionTone = computed(() => {
 })
 const claudeSession = computed(() => managed.value?.applicationId === 'claude')
 const savedExit = computed(() => snapshot.value?.config.expectedProxyIPv4 ?? '')
-const exitDirty = computed(() => expectedExit.value !== savedExit.value)
+const savedHTTPPort = computed(() => snapshot.value?.config.v2rayNHTTPPort || defaultHTTPPort)
+const networkDirty = computed(() => expectedExit.value !== savedExit.value || Number(httpPort.value) !== savedHTTPPort.value)
+const displayedExit = computed(() => managedActive.value
+ ? managed.value?.expectedProxyIPv4 || managed.value?.proxyExit || '待核对'
+ : savedExit.value || '待保存')
+const displayedHTTPPort = computed(() => managedActive.value
+ ? managed.value?.v2rayNHTTPPort || defaultHTTPPort
+ : savedHTTPPort.value)
 const claudeStartBlocked = computed(() => !managed.value?.available || statusIssue.value || busy.value ||
  !!managedBusy.value || managedActive.value || needsRecovery.value || cleaningCookies.value ||
- !savedExit.value || exitDirty.value)
+ !savedExit.value || networkDirty.value)
 const sessionConfigLocked = computed(() => managedActive.value || !!managedBusy.value || needsRecovery.value)
 const sessionDescription = computed(() => {
  if (statusIssue.value) return '正在重试读取守护状态。'
@@ -68,7 +79,7 @@ const sessionDescription = computed(() => {
  if (!managed.value) return '正在读取本机守护程序状态。'
  if (!managed.value.available || status.value !== 'idle') return managed.value.detail
  if (!savedExit.value) return '请保存 v2rayN 节点的固定公网 IPv4。'
- if (exitDirty.value) return '有尚未保存的出口 IPv4，请先保存。'
+ if (networkDirty.value) return '有尚未保存的出口设置，请先保存。'
  return '已准备启动隔离窗口。启动时将核对 v2rayN、TUN 和固定出口。'
 })
 const observedExit = computed(() => managed.value?.exitCheckedAt
@@ -132,13 +143,29 @@ const resetConfirmed = ref(false)
 const profiles = computed(() => snapshot.value?.config.profiles ?? [])
 const selected = computed(() => profiles.value.find(item => item.id === snapshot.value?.config.selectedProfileId))
 async function openExitSetup() {
+ editingNetwork.value = true
  page.value = 'overview'
  await nextTick()
  exitInput.value?.focus()
 }
+async function closeNetworkEditor() {
+ expectedExit.value = savedExit.value
+ httpPort.value = savedHTTPPort.value
+ editingNetwork.value = false
+ await nextTick()
+ editNetworkButton.value?.focus()
+}
+async function cancelNetworkEdit() {
+ if (busy.value || managedBusy.value) return
+ error.value = ''
+ await closeNetworkEditor()
+}
 function accept(value: Snapshot) {
  const previousExit = snapshot.value?.config.expectedProxyIPv4 ?? ''
- if (!snapshot.value || expectedExit.value === previousExit) expectedExit.value = value.config.expectedProxyIPv4 ?? ''
+ if (!editingNetwork.value || expectedExit.value === previousExit) expectedExit.value = value.config.expectedProxyIPv4 ?? ''
+ if (!editingNetwork.value || Number(httpPort.value) === savedHTTPPort.value) {
+  httpPort.value = value.config.v2rayNHTTPPort || defaultHTTPPort
+ }
  snapshot.value = value
 }
 function messageOf(value: unknown) { return value instanceof Error ? value.message : String(value) }
@@ -173,11 +200,12 @@ async function saveProxy() {
  await run(() => backend.SaveProxy({ ...form, port: Number(form.port) }), '代理入口已保存，尚未进行连接测试。')
  if (!error.value) dialog.value = false
 }
-async function saveExpectedExit() {
- if (sessionConfigLocked.value || !exitDirty.value) return
- const submitted = expectedExit.value
- await run(() => backend.SaveExpectedProxyIPv4(submitted), '固定代理出口已保存。')
- if (!error.value && expectedExit.value === submitted) expectedExit.value = snapshot.value?.config.expectedProxyIPv4 ?? ''
+async function saveSessionNetwork() {
+ if (!editingNetwork.value || busy.value || managedBusy.value || !networkDirty.value) return
+ const ip = expectedExit.value
+ const port = Number(httpPort.value)
+ await run(() => backend.SaveSessionNetwork(ip, port), '出口设置已保存，下次启动会话时生效。')
+ if (!error.value) await closeNetworkEditor()
 }
 async function openConfigDirectory() {
  if (busy.value) return
@@ -187,7 +215,10 @@ async function openConfigDirectory() {
 }
 async function resetConfiguration() {
  await run(() => backend.ResetConfiguration(resetConfirmed.value), '原配置已备份，已恢复默认配置。')
- if (!error.value) resetConfirmed.value = false
+ if (!error.value) {
+  resetConfirmed.value = false
+  await closeNetworkEditor()
+ }
 }
 async function reloadConfiguration() {
  resetConfirmed.value = false
@@ -298,30 +329,47 @@ onUnmounted(() => {
         @click="managedAction('start', () => backend.StartManagedApplication('claude'))">
         <Icon name="shield" :size="16" />{{ managedBusy === 'start' ? '正在请求管理员授权…' : managed?.takeoverAvailable ? '接管并重启 Claude' : '启动 Claude 并保护' }}
        </button>
-       <button v-if="!savedExit || exitDirty" class="button hero-secondary" :disabled="sessionConfigLocked" @click="openExitSetup">配置固定出口</button>
-       <button v-else-if="managed?.directory && (abnormalStop || status === 'failed')" class="button hero-secondary" @click="page = 'diagnostics'">查看会话诊断</button>
+       <button v-if="!editingNetwork" ref="editNetworkButton" class="button hero-secondary"
+        :disabled="busy || !!managedBusy" @click="openExitSetup">{{ savedExit ? '修改出口设置' : '配置固定出口' }}</button>
+       <button v-if="managed?.directory && (abnormalStop || status === 'failed')" class="button hero-secondary" @click="page = 'diagnostics'">查看会话诊断</button>
       </div>
      </div>
      <div class="session-mark" aria-hidden="true"><Icon name="shield" :size="76" /></div>
      <dl class="session-metrics">
-      <div><dt>固定公网 IPv4</dt><dd><span :class="{ mono: savedExit }">{{ savedExit || '待保存' }}</span></dd></div>
-      <div><dt>v2rayN HTTP 入口</dt><dd class="mono">127.0.0.1:10808</dd></div>
+      <div><dt>{{ managedActive ? '当前会话固定公网 IPv4' : '固定公网 IPv4' }}</dt><dd>{{ displayedExit }}</dd></div>
+      <div><dt>{{ managedActive ? '当前会话 HTTP 入口' : 'v2rayN HTTP 入口' }}</dt><dd class="mono">127.0.0.1:{{ displayedHTTPPort }}</dd></div>
      </dl>
     </section>
 
     <div class="dashboard-grid">
      <section class="panel panel-body" aria-labelledby="setup-title">
       <h2 id="setup-title">固定出口配置</h2>
-      <form class="exit-form" @submit.prevent="saveExpectedExit">
-       <label for="expected-exit">固定代理出口 IPv4</label>
-       <div class="field-actions">
-        <input id="expected-exit" ref="exitInput" v-model.trim="expectedExit" class="mono" maxlength="15"
-         autocomplete="off" spellcheck="false" placeholder="填写节点的公网 IPv4"
-         :disabled="sessionConfigLocked || busy" aria-describedby="exit-hint" />
-        <button class="button" type="submit" :disabled="sessionConfigLocked || busy || !exitDirty">保存出口 IP</button>
+      <form class="exit-form" @submit.prevent="saveSessionNetwork">
+       <div class="host-port">
+        <div>
+         <label for="expected-exit">固定代理出口 IPv4</label>
+         <input id="expected-exit" ref="exitInput" v-model.trim="expectedExit" class="mono" maxlength="15"
+          autocomplete="off" spellcheck="false" placeholder="节点的公网 IPv4"
+          :readonly="!editingNetwork" :disabled="busy || !!managedBusy" aria-describedby="exit-hint" />
+        </div>
+        <div>
+         <label for="session-proxy-port">本机 HTTP 端口</label>
+         <input id="session-proxy-port" v-model.number="httpPort" class="mono" type="number"
+          min="1024" max="65535" step="1" required :readonly="!editingNetwork" :disabled="busy || !!managedBusy"
+          aria-describedby="exit-hint" />
+        </div>
        </div>
-       <p v-if="exitDirty" id="exit-hint" class="field-note pending-text">有尚未保存的 IPv4 修改。</p>
-       <p v-else id="exit-hint" class="field-note">填写 v2rayN 节点的公网 IPv4，供启动隔离会话前核对。</p>
+       <p v-if="editingNetwork" id="exit-hint" class="field-note" :class="{ 'pending-text': networkDirty }">
+        {{ networkDirty ? '有尚未保存的出口设置。' : '端口须与 v2rayN 的本机 HTTP 或混合监听端口一致。' }}
+        <template v-if="managedActive">本次修改在下次启动会话时生效。</template>
+       </p>
+       <p v-else id="exit-hint" class="field-note">
+        {{ savedExit ? '点击「修改出口设置」可编辑。' : '点击「配置固定出口」填写公网 IPv4 和本机 HTTP 端口。' }}
+       </p>
+       <div v-if="editingNetwork" class="inline-actions exit-actions">
+        <button class="button primary" type="submit" :disabled="busy || !!managedBusy || !networkDirty">保存出口设置</button>
+        <button class="button" type="button" :disabled="busy || !!managedBusy" @click="cancelNetworkEdit">取消</button>
+       </div>
       </form>
      </section>
 
@@ -399,6 +447,7 @@ onUnmounted(() => {
      </div>
      <dl v-if="managed?.directory" class="diagnostic-facts">
       <div><dt>最近出口观测</dt><dd>{{ observedExit }} <span v-if="managed.exitCheckedAt">· {{ localDateTime(managed.exitCheckedAt) }}</span></dd></div>
+      <div v-if="managed.v2rayNHTTPPort"><dt>会话 HTTP 入口</dt><dd class="mono">127.0.0.1:{{ managed.v2rayNHTTPPort }}</dd></div>
       <div v-if="managed.lastExitSuccessAt"><dt>上次核验通过</dt><dd>{{ localDateTime(managed.lastExitSuccessAt) }}</dd></div>
       <div><dt>会话状态更新</dt><dd>{{ managed.updatedAt ? localDateTime(managed.updatedAt) : '暂无记录' }}</dd></div>
       <div><dt>状态代码</dt><dd><code>{{ managed.reason || '暂无记录' }}</code><span v-if="managed.error"> · Windows {{ managed.error }}</span></dd></div>

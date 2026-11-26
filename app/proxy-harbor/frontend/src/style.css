@@ -243,6 +243,7 @@ h3 { font-size: 14px; font-weight: 670; }
 
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.13fr) minmax(0, 1fr); gap: 18px; }
 .exit-form { margin-top: 16px; }
+.exit-actions { margin-top: 10px; }
 label, legend { display: block; color: #395166; font-size: 13px; font-weight: 600; }
 label + input, label + .field-actions { margin-top: 7px; }
 input:not([type="checkbox"], [type="radio"]) {
@@ -256,6 +257,7 @@ input:not([type="checkbox"], [type="radio"]) {
   color: #20394c;
 }
 input:disabled:not([type="checkbox"], [type="radio"]) { background: #f0f4f7; color: #526779; }
+.exit-form input:read-only { background: #f0f4f7; color: #526779; }
 input::placeholder { color: #627687; }
 .field-actions { display: flex; gap: 8px; align-items: stretch; }
 .field-actions input { flex: 1; }

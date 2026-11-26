@@ -10,6 +10,15 @@ import (
 
 var hostLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
+const DefaultV2rayNHTTPPort = 10808
+
+func ValidateV2rayNHTTPPort(port int) error {
+	if port < 1024 || port > 65535 {
+		return errors.New("v2rayN 本机 HTTP 端口必须介于 1024 和 65535 之间")
+	}
+	return nil
+}
+
 var specialIPv4 = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"),
@@ -58,6 +67,11 @@ func ValidateProfile(p ProxyProfile) error {
 	return nil
 }
 func ValidateConfig(c Config) error {
+	if c.V2rayNHTTPPort != 0 {
+		if err := ValidateV2rayNHTTPPort(c.V2rayNHTTPPort); err != nil {
+			return err
+		}
+	}
 	if c.ExpectedProxyIPv4 != "" {
 		if err := ValidateExpectedProxyIPv4(c.ExpectedProxyIPv4); err != nil {
 			return err

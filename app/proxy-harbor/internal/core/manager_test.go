@@ -15,37 +15,43 @@ func profile() domain.ProxyProfile {
 	return domain.ProxyProfile{Name: "开发代理", Protocol: "http", Host: "127.0.0.1", Port: 7890}
 }
 
-func TestFixedExitPersistsAndRejectsInvalidReplacement(t *testing.T) {
+func TestSessionNetworkSettingsPersistAndRejectInvalidReplacement(t *testing.T) {
 	repo := store.New(t.TempDir())
 	manager, err := New(repo, engine.Unavailable{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Legacy configs omit the new optional setting.
-	if manager.Snapshot().Config.ExpectedProxyIPv4 != "" {
-		t.Fatal("Unexpected default exit")
+	initial := manager.Snapshot().Config
+	if initial.ExpectedProxyIPv4 != "" || initial.V2rayNHTTPPort != domain.DefaultV2rayNHTTPPort {
+		t.Fatal("Unexpected network settings defaults")
 	}
-	if _, err = manager.SaveExpectedProxyIPv4(" 131.103.130.202 "); err != nil {
+	if _, err = manager.SaveSessionNetwork(" 1.1.1.1 ", 10809); err != nil {
 		t.Fatal(err)
 	}
 	for _, value := range []string{"127.0.0.1", "192.168.1.1", "203.0.113.1", "https://1.1.1.1", "::1"} {
-		if _, err = manager.SaveExpectedProxyIPv4(value); err == nil {
+		if _, err = manager.SaveSessionNetwork(value, 10810); err == nil {
 			t.Fatalf("Accepted %s", value)
+		}
+	}
+	for _, port := range []int{-1, 0, 1023, 65536} {
+		if _, err = manager.SaveSessionNetwork("8.8.8.8", port); err == nil {
+			t.Fatalf("Accepted port %d", port)
 		}
 	}
 	restarted, err := New(repo, engine.Unavailable{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restarted.Snapshot().Config.ExpectedProxyIPv4 != "131.103.130.202" {
-		t.Fatal("Stored exit changed or was lost")
+	saved := restarted.Snapshot().Config
+	if saved.ExpectedProxyIPv4 != "1.1.1.1" || saved.V2rayNHTTPPort != 10809 {
+		t.Fatal("Invalid updates changed the stored network settings")
 	}
-	if _, err = restarted.SaveExpectedProxyIPv4(""); err != nil {
+	if _, err = restarted.SaveSessionNetwork("", 17890); err != nil {
 		t.Fatal(err)
 	}
 	again, err := New(repo, engine.Unavailable{})
-	if err != nil || again.Snapshot().Config.ExpectedProxyIPv4 != "" {
-		t.Fatal("Cleared setting not persisted")
+	if err != nil || again.Snapshot().Config.ExpectedProxyIPv4 != "" || again.Snapshot().Config.V2rayNHTTPPort != 17890 {
+		t.Fatal("Updated settings were not persisted")
 	}
 }
 
@@ -94,7 +100,8 @@ func TestConfigurationSurvivesRestartAndDeletion(t *testing.T) {
 func TestLegacyConfigDropsRetiredApplicationsOnSave(t *testing.T) {
 	repo := store.New(t.TempDir())
 	legacy := domain.DefaultConfig()
-	legacy.ExpectedProxyIPv4 = "131.103.130.202"
+	legacy.ExpectedProxyIPv4 = "1.1.1.1"
+	legacy.V2rayNHTTPPort = 0
 	legacy.Applications = append(legacy.Applications,
 		domain.TargetApplication{ID: "chrome", Name: "Google Chrome", Executable: `C:\old\chrome.exe`, Compatibility: "unverified"},
 		domain.TargetApplication{ID: "codex", Name: "Codex", Compatibility: "unverified"},
@@ -112,6 +119,7 @@ func TestLegacyConfigDropsRetiredApplicationsOnSave(t *testing.T) {
 	}
 	snapshot := manager.Snapshot()
 	if snapshot.Startup.Error != "" || snapshot.Config.ExpectedProxyIPv4 != legacy.ExpectedProxyIPv4 ||
+		snapshot.Config.V2rayNHTTPPort != domain.DefaultV2rayNHTTPPort ||
 		len(snapshot.Config.Applications) != 1 || snapshot.Config.Applications[0] != legacy.Applications[0] {
 		t.Fatalf("unexpected desktop configuration: %+v", snapshot.Config)
 	}
@@ -119,7 +127,7 @@ func TestLegacyConfigDropsRetiredApplicationsOnSave(t *testing.T) {
 	if err != nil || string(unchanged) != string(data) {
 		t.Fatal("opening a legacy config rewrote the original file")
 	}
-	if _, err := manager.SaveExpectedProxyIPv4("1.1.1.1"); err != nil {
+	if _, err := manager.SaveSessionNetwork("8.8.8.8", 10809); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := repo.Load()

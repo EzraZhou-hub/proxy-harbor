@@ -14,6 +14,7 @@ export interface Config {
     "profiles": ProxyProfile[] | null;
     "selectedProfileId": string;
     "expectedProxyIPv4": string;
+    "v2rayNHTTPPort"?: number;
     "applications": TargetApplication[] | null;
 }
 
@@ -66,6 +67,8 @@ export interface ManagedSession {
     "filterCount": number;
     "componentCount": number;
     "proxyExit": string;
+    "expectedProxyIPv4": string;
+    "v2rayNHTTPPort": number;
     "lastObservedExit": string;
     "exitCheckedAt": string;
     "lastExitSuccessAt": string;

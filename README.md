@@ -2,24 +2,24 @@
 
 Proxy Harbor 是面向官方 Claude Desktop 的 Windows x64 会话保护工具。它复用已有的 v2rayN，在启动前核对指定代理的公网 IPv4，运行中通过 Windows Filtering Platform（WFP）限制 Claude 主程序的联网路径并持续核验出口。
 
-**当前版本 1.2.3** · [GitHub Releases](https://github.com/EzraZhou-hub/proxy-harbor/releases) · [开发与构建](app/proxy-harbor/README.md) · [文档索引](docs/README.md) · [MIT 许可证](LICENSE)
+**当前版本 1.2.5** · [GitHub Releases](https://github.com/EzraZhou-hub/proxy-harbor/releases) · [开发与构建](app/proxy-harbor/README.md) · [文档索引](docs/README.md) · [MIT 许可证](LICENSE)
 
 ## 安装条件
 
 - Windows 10 或 11 x64，当前 Windows 用户已安装官方 Claude Desktop x64（MSIX）。
-- v2rayN 已配置可用节点。启动会话前切到**全局模式**、开启 **TUN**，并确认本机 HTTP 入口为 `127.0.0.1:10808`。
+- v2rayN 已配置可用节点。启动会话前切到**全局模式**、开启 **TUN**，并确认 HTTP 或混合代理监听在 `127.0.0.1`。默认端口是 `10808`，可在「连接概览」修改。
 - 桌面界面以普通权限运行。启动受保护会话或恢复残留限制时，守护程序会请求管理员授权。
 - 桌面界面需要 WebView2 Runtime。安装包附带引导程序，可在系统缺少运行时的情况下尝试安装。
 
 ## 安装、升级与卸载
 
-在 [GitHub Releases](https://github.com/EzraZhou-hub/proxy-harbor/releases) 查看已发布的资产。1.2.3 的 Windows x64 安装包名为 `Proxy-Harbor-1.2.3-win-x64-setup.exe`。从源码打包时，安装包与同名 `.sha256` 生成在 `app/proxy-harbor/bin/release-1.2.3/`。
+在 [GitHub Releases](https://github.com/EzraZhou-hub/proxy-harbor/releases) 查看已发布的资产。1.2.5 的 Windows x64 安装包名为 `Proxy-Harbor-1.2.5-win-x64-setup.exe`。从源码打包时，安装包与同名 `.sha256` 生成在 `app/proxy-harbor/bin/release-1.2.5/`。
 
 安装包未签名。下载安装包和校验文件后，可以用 PowerShell 对比两条命令输出的 SHA-256。
 
 ```powershell
-Get-FileHash .\Proxy-Harbor-1.2.3-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\Proxy-Harbor-1.2.3-win-x64-setup.exe.sha256
+Get-FileHash .\Proxy-Harbor-1.2.5-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\Proxy-Harbor-1.2.5-win-x64-setup.exe.sha256
 ```
 
 运行安装包后，从开始菜单打开 Proxy Harbor。默认安装路径为 `C:\Program Files\Proxy Harbor`。
@@ -28,18 +28,18 @@ Get-Content .\Proxy-Harbor-1.2.3-win-x64-setup.exe.sha256
 
 ## 开始保护会话
 
-1. 打开 Proxy Harbor，在「连接概览」填写并保存节点的**固定公网 IPv4**。填写的是节点的出口地址，代理入口仍是界面上的本机地址 `127.0.0.1:10808`。
+1. 打开 Proxy Harbor，在「连接概览」点击「配置固定出口」，填写节点的**固定公网 IPv4**与 v2rayN 的**本机 HTTP 端口**，点击「保存出口设置」。
 2. 保存 Claude 中的工作，点击「接管并重启 Claude」，允许守护程序运行。守护程序先核对代理入口、TUN 和固定出口，通过后才会关闭并用当前 Windows 用户重启 Claude。Claude 使用该账户原有的配置和登录数据。
 3. 等「会话保护中」出现后继续工作。关闭 Proxy Harbor 窗口会收起到通知区域，保护继续运行。从开始菜单或托盘可以再打开窗口。
 4. 使用「结束 Claude 会话」主动停止。遇到「需要恢复」时，选择「核对并恢复限制」，按提示授权，并等待清理完成。
 
 托盘菜单提供「登录时启动（最小化到托盘）」和「退出 Proxy Harbor」。退出时若会话仍在保护，程序会要求确认，退出将结束该会话。
 
-「代理配置」页面用于管理保存的入口。Claude 会话固定使用上面的 v2rayN 本机 HTTP 入口。
+两项保存后为只读。点击「修改出口设置」可再次编辑，取消会恢复已保存的值。运行中保存的设置在下次启动时生效，概览上方显示当前会话实际使用的值。「代理配置」页面用于管理其他入口。
 
 ## 网络保护的范围
 
-| 对象 | 1.2.3 的行为 |
+| 对象 | 当前行为 |
 | --- | --- |
 | Claude 主程序 | WFP 阻断非回环 IPv4 TCP 直连、IPv4 UDP 和非回环 IPv6 出站。公网连接经指定的本机代理入口。 |
 | 本机预览和进程间通信 | 出站规则为 `127.0.0.1`、`::1` 和 `::ffff:127.0.0.1` 保留回环例外。紧急阻断规则覆盖回环。 |
@@ -80,6 +80,6 @@ Get-Content .\Proxy-Harbor-1.2.3-win-x64-setup.exe.sha256
 | [文档索引](docs/README.md) | 当前实现、版本记录与早期 P0 研究 |
 | [开发与测试约束](AGENTS.md) | 实验授权范围和项目维护记录 |
 
-1.2.3 通过守护规则结构、出口状态与回环超时检查，以及 Go、前端类型和 7 项隔离界面回归。开发机通过既有 v2rayN 做了一次只读探测，实测出口匹配保存值。该轮测试范围为隔离验证与只读探测，未执行本机安装或启动真实 Claude 会话。[出口核验与验证记录](docs/exit-probe-tolerance.md)
+1.2.4 通过自定义端口的规则结构和配置回归、8 项界面测试，以及本机现有 v2rayN 入口的只读核验。非默认端口的真实受管会话联调尚未执行。[验证记录](docs/current-requirements.md)
 
 本项目采用 [MIT 许可证](LICENSE)。第三方依赖遵循各自许可证。

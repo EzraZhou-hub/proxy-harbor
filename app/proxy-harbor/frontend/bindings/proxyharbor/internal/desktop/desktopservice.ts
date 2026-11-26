@@ -45,12 +45,12 @@ export function ResetConfiguration(confirmed: boolean): $CancellablePromise<doma
     return $Call.ByID(98356354, confirmed);
 }
 
-export function SaveExpectedProxyIPv4(value: string): $CancellablePromise<domain$0.Snapshot> {
-    return $Call.ByID(1099659643, value);
-}
-
 export function SaveProxy(p: domain$0.ProxyProfile): $CancellablePromise<domain$0.Snapshot> {
     return $Call.ByID(2995217896, p);
+}
+
+export function SaveSessionNetwork(ip: string, port: number): $CancellablePromise<domain$0.Snapshot> {
+    return $Call.ByID(2500739066, ip, port);
 }
 
 export function SelectProxy(id: string): $CancellablePromise<domain$0.Snapshot> {

@@ -9,7 +9,7 @@ type Client interface {
 	ReloadConfiguration() domain.Snapshot
 	ResetConfiguration(bool) (domain.Snapshot, error)
 	SaveProxy(domain.ProxyProfile) (domain.Snapshot, error)
-	SaveExpectedProxyIPv4(string) (domain.Snapshot, error)
+	SaveSessionNetwork(string, int) (domain.Snapshot, error)
 	DeleteProxy(string) (domain.Snapshot, error)
 	SelectProxy(string) (domain.Snapshot, error)
 	RefreshEnvironment() domain.Snapshot

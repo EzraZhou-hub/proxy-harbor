@@ -18,11 +18,12 @@ type Config struct {
 	Profiles          []ProxyProfile      `json:"profiles"`
 	SelectedProfileID string              `json:"selectedProfileId"`
 	ExpectedProxyIPv4 string              `json:"expectedProxyIPv4"`
+	V2rayNHTTPPort    int                 `json:"v2rayNHTTPPort,omitempty"`
 	Applications      []TargetApplication `json:"applications"`
 }
 
 func DefaultConfig() Config {
-	return Config{Version: 1, Profiles: []ProxyProfile{}, Applications: []TargetApplication{
+	return Config{Version: 1, V2rayNHTTPPort: DefaultV2rayNHTTPPort, Profiles: []ProxyProfile{}, Applications: []TargetApplication{
 		{ID: "claude", Name: "Claude Desktop", Compatibility: "unverified"},
 	}}
 }
@@ -100,6 +101,8 @@ type ManagedSession struct {
 	FilterCount          int    `json:"filterCount"`
 	ComponentCount       int    `json:"componentCount"`
 	ProxyExit            string `json:"proxyExit"`
+	ExpectedProxyIPv4    string `json:"expectedProxyIPv4"`
+	V2rayNHTTPPort       int    `json:"v2rayNHTTPPort"`
 	LastObservedExit     string `json:"lastObservedExit"`
 	ExitCheckedAt        string `json:"exitCheckedAt"`
 	LastExitSuccessAt    string `json:"lastExitSuccessAt"`

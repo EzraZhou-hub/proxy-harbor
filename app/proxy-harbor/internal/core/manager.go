@@ -57,6 +57,9 @@ func (m *Manager) loadConfigLocked() {
 		return
 	}
 	m.config = config
+	if m.config.V2rayNHTTPPort == 0 {
+		m.config.V2rayNHTTPPort = domain.DefaultV2rayNHTTPPort
+	}
 	m.config.Applications = nil
 	for _, app := range config.Applications {
 		if app.ID == "claude" {
@@ -84,7 +87,7 @@ func (m *Manager) snapshotLocked() domain.Snapshot {
 		_, recoverable := m.repository.(recoveryRepository)
 		startup.CanReset = recoverable && errors.Is(m.loadError, domain.ErrInvalidConfig)
 	}
-	return domain.Snapshot{Version: "1.2.3", Startup: startup, Config: config, ConfigPath: m.repository.Path(), Engine: m.engine.Describe(),
+	return domain.Snapshot{Version: "1.2.5", Startup: startup, Config: config, ConfigPath: m.repository.Path(), Engine: m.engine.Describe(),
 		Protection: domain.ProtectionStatus{State: "unavailable", CanStart: false, Blockers: blockers}, Environment: m.environment,
 		Checks: diagnostics.PendingChecks(), Logs: append([]domain.LogEntry{}, m.logs...)}
 }
@@ -171,7 +174,7 @@ func (m *Manager) SaveProxy(profile domain.ProxyProfile) (domain.Snapshot, error
 	return m.commit(next, "代理配置已保存，尚未验证联网能力。")
 }
 
-func (m *Manager) SaveExpectedProxyIPv4(value string) (domain.Snapshot, error) {
+func (m *Manager) SaveSessionNetwork(value string, port int) (domain.Snapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	value = strings.TrimSpace(value)
@@ -180,9 +183,13 @@ func (m *Manager) SaveExpectedProxyIPv4(value string) (domain.Snapshot, error) {
 			return domain.Snapshot{}, err
 		}
 	}
+	if err := domain.ValidateV2rayNHTTPPort(port); err != nil {
+		return domain.Snapshot{}, err
+	}
 	next := m.config
 	next.ExpectedProxyIPv4 = value
-	return m.commit(next, "已保存固定代理出口 IPv4。")
+	next.V2rayNHTTPPort = port
+	return m.commit(next, "已保存固定出口 IPv4 和 v2rayN HTTP 入口。")
 }
 func (m *Manager) DeleteProxy(id string) (domain.Snapshot, error) {
 	m.mu.Lock()

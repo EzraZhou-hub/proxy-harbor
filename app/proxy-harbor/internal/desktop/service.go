@@ -49,7 +49,7 @@ func (s *DesktopService) StartManagedApplication(id string) (domain.ManagedSessi
 	}
 	for _, app := range snapshot.Config.Applications {
 		if app.ID == id {
-			endpoint, err := s.managed.V2rayNEndpoint(snapshot.Config.ExpectedProxyIPv4)
+			endpoint, err := s.managed.V2rayNEndpoint(snapshot.Config.ExpectedProxyIPv4, snapshot.Config.V2rayNHTTPPort)
 			if err != nil {
 				return status, err
 			}
@@ -81,8 +81,8 @@ func (s *DesktopService) OpenConfigDirectory() error {
 func (s *DesktopService) SaveProxy(p domain.ProxyProfile) (domain.Snapshot, error) {
 	return s.client.SaveProxy(p)
 }
-func (s *DesktopService) SaveExpectedProxyIPv4(value string) (domain.Snapshot, error) {
-	return s.client.SaveExpectedProxyIPv4(value)
+func (s *DesktopService) SaveSessionNetwork(ip string, port int) (domain.Snapshot, error) {
+	return s.client.SaveSessionNetwork(ip, port)
 }
 func (s *DesktopService) DeleteProxy(id string) (domain.Snapshot, error) {
 	return s.client.DeleteProxy(id)

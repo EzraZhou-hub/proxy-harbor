@@ -22,9 +22,9 @@ DWORD ClaudeTakeoverBind(CLAUDE_TAKEOVER *state, const wchar_t *record, const wc
                          const wchar_t *package, HANDLE parent);
 DWORD ClaudeTakeoverRead(CLAUDE_TAKEOVER *state, const wchar_t *record);
 DWORD ClaudeTakeoverFind(CLAUDE_TAKEOVER *state, BOOL restart, BOOL *active);
-DWORD ClaudeTakeoverPrepare(CLAUDE_TAKEOVER *state, const wchar_t *folder);
+DWORD ClaudeTakeoverPrepare(CLAUDE_TAKEOVER *state, const wchar_t *folder, unsigned proxy_port);
 DWORD ClaudeTakeoverResume(CLAUDE_TAKEOVER *state);
 DWORD ClaudeTakeoverHealth(CLAUDE_TAKEOVER *state);
 BOOL ClaudeTakeoverCovered(CLAUDE_TAKEOVER *state, HANDLE process);
-DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD parent);
+DWORD ClaudeTakeoverWorker(CLAUDE_TAKEOVER *state, const wchar_t *folder, DWORD parent, unsigned proxy_port);
 void ClaudeTakeoverRelease(CLAUDE_TAKEOVER *state);

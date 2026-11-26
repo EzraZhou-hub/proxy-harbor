@@ -29,6 +29,7 @@ static CLAUDE_TAKEOVER takeover;
 #define MAX_IMAGES 64
 #define BASE_RULES 6
 #define MAX_CONDITIONS 4
+#define DEFAULT_PROXY_PORT 10808
 #define EXIT_ATTEMPT_MS 3000
 #define EXIT_INTERVAL_MS 10000
 #define EXIT_RETRY_MS 1000
@@ -140,7 +141,7 @@ static void exit_timestamp(char out[32], const SYSTEMTIME *time) {
                   time->wMonth, time->wDay, time->wHour, time->wMinute, time->wSecond);
 }
 static void status(const char *state, const char *reason) {
-    char json[1200], last_success[32];
+    char json[1280], last_success[32];
     SYSTEMTIME now;
     struct exit_health health = exit_snapshot();
     exit_timestamp(last_success, &health.last_success_at);
@@ -150,6 +151,7 @@ static void status(const char *state, const char *reason) {
               "\"guardianPid\":%lu,\"guardianCreated\":%llu,"
               "\"supervisorThreadId\":%lu,"
               "\"filterCount\":%u,\"proxyExit\":\"%s\",\"tunIndex\":%lu,"
+              "\"expectedProxyIPv4\":\"%s\",\"v2rayNHTTPPort\":%u,"
               "\"blockedAt\":\"%s\",\"blockedFilterId\":\"%llu\","
               "\"blockDirection\":\"%s\","
               "\"blockedProtocol\":%u,\"blockedRemotePort\":%u,"
@@ -163,7 +165,7 @@ static void status(const char *state, const char *reason) {
               "\"ipv6\":\"%s\"}\n",
               state, reason, error_code, child_pid, GetCurrentProcessId(),
               creation(GetCurrentProcess()), GetCurrentThreadId(), installed + dns_guard.count,
-              observed_exit, tun_index, blocked_at, blocked_filter,
+              observed_exit, tun_index, expected_exit, proxy_port, blocked_at, blocked_filter,
               block_direction, blocked_protocol, blocked_remote_port,
               blocked_remote[0] ? blocked_remote : "unknown",
               exit_state(health), health.failures, exit_stop_cause(health.fault), last_success,
@@ -195,6 +197,16 @@ static BOOL same_image(HANDLE process, const wchar_t *expected) {
     DWORD length = 1024;
     return QueryFullProcessImageNameW(process, 0, text, &length) &&
            !_wcsicmp(text, expected);
+}
+static BOOL parse_proxy_port(const wchar_t *text, unsigned *port) {
+    size_t length = wcslen(text);
+    if (!length || length > 5 || wcsspn(text, L"0123456789") != length)
+        return FALSE;
+    unsigned parsed = (unsigned)wcstoul(text, NULL, 10);
+    if (parsed < 1024 || parsed > 65535)
+        return FALSE;
+    *port = parsed;
+    return TRUE;
 }
 static BOOL read_request(const wchar_t *folder, BOOL require_image) {
     DWORD length = GetFullPathNameW(folder, 1024, directory, NULL);
@@ -244,8 +256,7 @@ static BOOL read_request(const wchar_t *folder, BOOL require_image) {
         ok = ok && end && !*end && parent_pid;
         parent_created = _wcstoui64(lines[3], &end, 10);
         ok = ok && end && !*end && parent_created;
-        proxy_port = (unsigned)wcstoul(lines[4], &end, 10);
-        ok = ok && end && !*end && proxy_port >= 1024 && proxy_port <= 65535;
+        ok = ok && parse_proxy_port(lines[4], &proxy_port);
         if (wcslen(lines[5]) >= _countof(mode))
             ok = FALSE;
         else
@@ -300,7 +311,7 @@ static BOOL read_request(const wchar_t *folder, BOOL require_image) {
         ok = ok && ClaudeMSIXInstalledImage(images[0], claude_package);
 #ifdef PH_CLAUDE_MSIX_DESKTOP
     if (desktop_client)
-        ok = ok && claude_msix && !wcscmp(lines[0], L"PH4") && proxy_port == 10808;
+        ok = ok && claude_msix && !wcscmp(lines[0], L"PH4");
 #endif
 #endif
     user_identity = desktop_client || !wcscmp(mode, L"chrome-user") ||
@@ -2124,7 +2135,7 @@ int wmain(int argc, wchar_t **argv) {
             return ERROR_INVALID_PARAMETER;
         takeover.image = images[0];
         takeover.package = claude_package;
-        DWORD error = ClaudeTakeoverWorker(&takeover, directory, parent_pid);
+        DWORD error = ClaudeTakeoverWorker(&takeover, directory, parent_pid, proxy_port);
         ClaudeTakeoverRelease(&takeover);
         return (int)error;
     }
@@ -2143,13 +2154,13 @@ int wmain(int argc, wchar_t **argv) {
         GUID id;
         wchar_t username[256], expected[32];
         DWORD size = ARRAYSIZE(username);
-        if (wcscmp(argv[3], L"10808") || FAILED(CLSIDFromString(argv[4], &id)) ||
+        if (!parse_proxy_port(argv[3], &proxy_port) || FAILED(CLSIDFromString(argv[4], &id)) ||
             !GetUserNameW(username, &size))
             return 2;
         SessionAccountName(&id, expected);
         if (_wcsicmp(username, expected))
             return 2;
-        ExitProcess(ClaudeMSIXLaunch(argv[2], 10808));
+        ExitProcess(ClaudeMSIXLaunch(argv[2], proxy_port));
     }
 #endif
     if (argc == 5 && !wcscmp(argv[1], L"dns-watch")) {
@@ -2157,17 +2168,21 @@ int wmain(int argc, wchar_t **argv) {
             return 3;
         return watch_dns(argv[3], argv[4]);
     }
-    if (argc == 2 && !wcscmp(argv[1], L"proxy-owner")) {
-        proxy_port = 10808;
+    if ((argc == 2 || argc == 3) && !wcscmp(argv[1], L"proxy-owner")) {
+        proxy_port = DEFAULT_PROXY_PORT;
+        if (argc == 3 && !parse_proxy_port(argv[2], &proxy_port))
+            return 2;
         DWORD pid = 0;
         ULONGLONG born = 0;
         if (!v2rayn_owner(&pid, &born))
             return 1;
-        printf("{\"pid\":%lu,\"created\":%llu}\n", pid, born);
+        printf("{\"pid\":%lu,\"created\":%llu,\"port\":%u}\n", pid, born, proxy_port);
         return 0;
     }
-    if (argc == 2 && !wcscmp(argv[1], L"check")) {
-        proxy_port = 10808;
+    if ((argc == 2 || argc == 3) && !wcscmp(argv[1], L"check")) {
+        proxy_port = DEFAULT_PROXY_PORT;
+        if (argc == 3 && !parse_proxy_port(argv[2], &proxy_port))
+            return 2;
         DWORD pid = 0;
         ULONGLONG born = 0;
         BOOL recognized = v2rayn_owner(&pid, &born);
@@ -2177,9 +2192,9 @@ int wmain(int argc, wchar_t **argv) {
                         GetTickCount64() + EXIT_ATTEMPT_MS * ARRAYSIZE(exit_endpoints));
         BOOL tun_ready = tun_ok(TRUE);
         printf("{\"systemChanged\":false,\"recognizedListener\":%s,"
-               "\"proxyListenerPid\":%lu,\"exitVerified\":false,"
+               "\"proxyListenerPid\":%lu,\"proxyPort\":%u,\"exitVerified\":false,"
                "\"proxyExit\":\"%s\",\"tunReady\":%s,\"tunIndex\":%lu}\n",
-               recognized ? "true" : "false", pid,
+               recognized ? "true" : "false", pid, proxy_port,
                observed ? observed_exit : "", tun_ready ? "true" : "false", tun_index);
         return observed ? 0 : 1;
     }
@@ -2471,7 +2486,7 @@ int wmain(int argc, wchar_t **argv) {
 #ifdef PH_CLAUDE_TAKEOVER
     if (current_user) {
         reason = "takeover_launch_failed";
-        error_code = ClaudeTakeoverPrepare(&takeover, directory);
+        error_code = ClaudeTakeoverPrepare(&takeover, directory, proxy_port);
         if (!error_code && (!verify_filters() || stop_requested() || exit_stop_reason() || !tun_ok(FALSE) ||
                             WaitForSingleObject(proxy_process, 0) != WAIT_TIMEOUT ||
                             WaitForSingleObject(parent, 0) != WAIT_TIMEOUT || listener_pid() != proxy_pid)) {

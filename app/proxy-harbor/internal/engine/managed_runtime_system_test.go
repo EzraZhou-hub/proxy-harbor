@@ -127,7 +127,7 @@ func guestProxyEndpoint(t *testing.T, ip string, pid int) session.ProxyEndpoint 
 	if err = windows.GetProcessTimes(handle, &c, &e, &k, &u); err != nil {
 		t.Fatal(err)
 	}
-	return session.ProxyEndpoint{IPv4: ip, PID: uint32(pid), Created: uint64(c.HighDateTime)<<32 | uint64(c.LowDateTime)}
+	return session.ProxyEndpoint{IPv4: ip, PID: uint32(pid), Created: uint64(c.HighDateTime)<<32 | uint64(c.LowDateTime), Port: 10808}
 }
 func TestManagedRuntimeChromeWindow(t *testing.T) {
 	prepareCapsuleFixtures(t)
@@ -273,7 +273,7 @@ func TestManagedRuntimeChromeWindow(t *testing.T) {
 		t.Error("Concurrent recovery succeeded on a live session")
 	}
 	check("competing_recovery_preserves_live_session", runtime.Status().State == "monitoring" && runtime.Status().GuardianPID == state.GuardianPID)
-	if _, err := runtime.V2rayNEndpoint(manifest.Expected); err == nil {
+	if _, err := runtime.V2rayNEndpoint(manifest.Expected, 10808); err == nil {
 		t.Error("File bridge incorrectly identified as a v2rayN core")
 	} else {
 		check("unrelated_listener_rejected_by_desktop_discovery", true)
