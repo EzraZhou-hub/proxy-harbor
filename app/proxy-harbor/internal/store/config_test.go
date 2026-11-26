@@ -31,7 +31,9 @@ func TestCorruptAndUnsupportedFilesArePreserved(t *testing.T) {
 
 func TestPolicyClaimsCannotBePersisted(t *testing.T) {
 	config := domain.DefaultConfig()
-	config.Applications[1].Compatibility = "verified"
+	config.Applications = append(config.Applications, domain.TargetApplication{
+		ID: "chrome", Name: "Google Chrome", Compatibility: "verified",
+	})
 	if err := New(t.TempDir()).Save(config); err == nil {
 		t.Fatal("unverified application can forge a protection claim")
 	}

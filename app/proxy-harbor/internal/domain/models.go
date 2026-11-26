@@ -24,7 +24,6 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{Version: 1, Profiles: []ProxyProfile{}, Applications: []TargetApplication{
 		{ID: "claude", Name: "Claude Desktop", Compatibility: "unverified"},
-		{ID: "chrome", Name: "Google Chrome", Compatibility: "unverified"},
 	}}
 }
 
@@ -103,6 +102,10 @@ type ManagedSession struct {
 	ProxyExit            string `json:"proxyExit"`
 	LastObservedExit     string `json:"lastObservedExit"`
 	ExitCheckedAt        string `json:"exitCheckedAt"`
+	LastExitSuccessAt    string `json:"lastExitSuccessAt"`
+	ExitState            string `json:"exitState"`
+	ExitFailures         uint32 `json:"exitFailures"`
+	ExitStopCause        string `json:"exitStopCause"`
 	TunIndex             uint32 `json:"tunIndex"`
 	UpdatedAt            string `json:"updatedAt"`
 	BlockedAt            string `json:"blockedAt"`

@@ -3,7 +3,6 @@ package desktop
 import (
 	"fmt"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"os"
 	"path/filepath"
 	"proxyharbor/internal/control"
 	"proxyharbor/internal/domain"
@@ -18,22 +17,7 @@ type DesktopService struct {
 const desktopSessionRequired = "会话保护仅在 Windows x64 桌面版开放。"
 
 func New(client control.Client) *DesktopService {
-	service := &DesktopService{client: client, managed: session.New(filepath.Dir(client.Snapshot().ConfigPath))}
-	if nativeSessionsAllowed() && service.managed.Status().Available {
-		snapshot := client.Snapshot()
-		if snapshot.Startup.Error == "" {
-			for _, app := range snapshot.Config.Applications {
-				if app.ID == "chrome" && app.Executable == "" {
-					path := `C:\Program Files\Google\Chrome\Application\chrome.exe`
-					if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-						client.ConfigureApplication("chrome", path)
-					}
-					break
-				}
-			}
-		}
-	}
-	return service
+	return &DesktopService{client: client, managed: session.New(filepath.Dir(client.Snapshot().ConfigPath))}
 }
 func (s *DesktopService) ManagedStatus() domain.ManagedSession {
 	status := s.managed.Status()
@@ -52,7 +36,7 @@ func (s *DesktopService) StartManagedApplication(id string) (domain.ManagedSessi
 	if !nativeSessionsAllowed() {
 		return s.ManagedStatus(), fmt.Errorf("%s", desktopSessionRequired)
 	}
-	if id != "chrome" && (id != "claude" || !session.DesktopAdmitted()) {
+	if id != "claude" || !session.DesktopAdmitted() {
 		return s.ManagedStatus(), fmt.Errorf("当前版本未开放该应用的会话保护")
 	}
 	status := s.managed.Status()
@@ -106,11 +90,5 @@ func (s *DesktopService) DeleteProxy(id string) (domain.Snapshot, error) {
 func (s *DesktopService) SelectProxy(id string) (domain.Snapshot, error) {
 	return s.client.SelectProxy(id)
 }
-func (s *DesktopService) ConfigureApplication(id, path string) (domain.Snapshot, error) {
-	return s.client.ConfigureApplication(id, path)
-}
 func (s *DesktopService) RefreshEnvironment() domain.Snapshot { return s.client.RefreshEnvironment() }
 func (s *DesktopService) StartProtection() error              { return s.client.StartProtection() }
-func (s *DesktopService) ChooseExecutable() (string, error) {
-	return application.Get().Dialog.OpenFile().SetTitle("选择应用程序").AddFilter("Windows 应用", "*.exe").PromptForSingleSelection()
-}

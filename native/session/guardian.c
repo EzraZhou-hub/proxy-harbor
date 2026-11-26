@@ -29,6 +29,10 @@ static CLAUDE_TAKEOVER takeover;
 #define MAX_IMAGES 64
 #define BASE_RULES 6
 #define MAX_CONDITIONS 4
+#define EXIT_ATTEMPT_MS 3000
+#define EXIT_INTERVAL_MS 10000
+#define EXIT_RETRY_MS 1000
+#define EXIT_MAX_AGE_MS 30000
 // The client image may reach loopback for local preview servers and MCP
 // bridges. Neither address leaves the host, so the explicit proxy still owns
 // every off-host path. IPv6 needs explicit entries because localhost can
@@ -64,15 +68,19 @@ static HANDLE proxy_record;
 static UINT32 previous_events;
 static FILETIME began;
 static char observed_exit[64], expected_exit[16];
-static volatile LONG64 last_exit_check;
 static char blocked_at[32], block_direction[12], blocked_remote[64];
 static UINT64 blocked_filter;
 static unsigned blocked_protocol, blocked_remote_port;
 static HANDLE stop_checks, exit_thread, exit_alarm;
-enum exit_fault { EXIT_HEALTHY, EXIT_MISMATCH, EXIT_UNVERIFIED };
-static volatile LONG exit_fault, exit_failures;
+enum exit_fault { EXIT_HEALTHY, EXIT_MISMATCH, EXIT_REPEATED_FAILURE, EXIT_EXPIRED, EXIT_START_FAILED };
+static SRWLOCK exit_lock = SRWLOCK_INIT;
+static struct exit_health {
+    ULONGLONG last_check;
+    SYSTEMTIME last_success_at;
+    unsigned failures;
+    enum exit_fault fault;
+} exit_health;
 static SESSION_TCP_PEER unexpected_peer;
-static DWORD network_error;
 static BOOL diagnostics_pending;
 #ifdef PH_CLAUDE_MSIX
 static BOOL claude_msix;
@@ -103,22 +111,39 @@ static BOOL write_file(const wchar_t *leaf, const char *data) {
     CloseHandle(f);
     return ok;
 }
-static const char *exit_state(void) {
-    LONG fault = InterlockedCompareExchange(&exit_fault, 0, 0);
-    if (fault == EXIT_MISMATCH)
+static struct exit_health exit_snapshot(void) {
+    AcquireSRWLockShared(&exit_lock);
+    struct exit_health health = exit_health;
+    ReleaseSRWLockShared(&exit_lock);
+    return health;
+}
+static const char *exit_state(struct exit_health health) {
+    if (health.fault == EXIT_MISMATCH)
         return "mismatch";
-    if (fault == EXIT_UNVERIFIED)
+    if (health.fault != EXIT_HEALTHY)
         return "failed";
-    if (InterlockedCompareExchange(&exit_failures, 0, 0) > 0)
-        return "retrying";
-    return "ok";
+    return health.failures ? "retrying" : "ok";
+}
+static const char *exit_stop_cause(enum exit_fault fault) {
+    switch (fault) {
+    case EXIT_MISMATCH: return "address_mismatch";
+    case EXIT_REPEATED_FAILURE: return "consecutive_failures";
+    case EXIT_EXPIRED: return "verification_expired";
+    case EXIT_START_FAILED: return "startup_probe_failed";
+    default: return "";
+    }
+}
+static void exit_timestamp(char out[32], const SYSTEMTIME *time) {
+    out[0] = '\0';
+    if (time->wYear)
+        sprintf_s(out, 32, "%04u-%02u-%02uT%02u:%02u:%02uZ", time->wYear,
+                  time->wMonth, time->wDay, time->wHour, time->wMinute, time->wSecond);
 }
 static void status(const char *state, const char *reason) {
-    char json[1024];
+    char json[1200], last_success[32];
     SYSTEMTIME now;
-    const char *probe = exit_state();
-    unsigned long failures =
-        (unsigned long)InterlockedCompareExchange(&exit_failures, 0, 0);
+    struct exit_health health = exit_snapshot();
+    exit_timestamp(last_success, &health.last_success_at);
     GetSystemTime(&now);
     sprintf_s(json, sizeof(json),
               "{\"state\":\"%s\",\"reason\":\"%s\",\"error\":%lu,\"pid\":%lu,"
@@ -129,7 +154,8 @@ static void status(const char *state, const char *reason) {
               "\"blockDirection\":\"%s\","
               "\"blockedProtocol\":%u,\"blockedRemotePort\":%u,"
               "\"blockedRemoteAddress\":\"%s\","
-              "\"exitState\":\"%s\",\"exitFailures\":%lu,"
+              "\"exitState\":\"%s\",\"exitFailures\":%u,"
+              "\"exitStopCause\":\"%s\",\"lastExitSuccessAt\":\"%s\","
               "\"unexpectedPeerPid\":%lu,\"unexpectedPeerFamily\":%u,"
               "\"unexpectedPeerPort\":%u,\"jobQueryRetries\":%lu,"
               "\"updatedAt\":\"%04u-%02u-%02uT%02u:%"
@@ -140,7 +166,7 @@ static void status(const char *state, const char *reason) {
               observed_exit, tun_index, blocked_at, blocked_filter,
               block_direction, blocked_protocol, blocked_remote_port,
               blocked_remote[0] ? blocked_remote : "unknown",
-              probe, failures,
+              exit_state(health), health.failures, exit_stop_cause(health.fault), last_success,
               unexpected_peer.pid, unexpected_peer.family, unexpected_peer.remote_port,
               SessionJobQueryRetries(), now.wYear,
               now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
@@ -784,164 +810,338 @@ static BOOL ipv4_public(const char *text) {
            (v >> 17) != (0xc6120000 >> 17) && (v >> 8) != 0xc63364 &&
            (v >> 8) != 0xcb0071;
 }
-// A TLS read may finish in the middle of a syntactically valid address.
-// Require the complete bounded response and canonical ASCII before comparing.
-static BOOL read_exit_body(HINTERNET request, char out[64]) {
+static const struct exit_endpoint {
+    const char *name;
+    const wchar_t *host, *path;
+} exit_endpoints[] = {
+    {"api.ipify.org", L"api.ipify.org", L"/"},
+    {"ifconfig.me/ip", L"ifconfig.me", L"/ip"},
+};
+
+struct exit_attempt {
+    const char *stage;
+    DWORD elapsed, error, http_status;
+};
+
+struct exit_report {
+    struct exit_attempt attempts[ARRAYSIZE(exit_endpoints)];
+    unsigned count;
+    DWORD elapsed;
+};
+
+struct exit_request {
+    HANDLE ready;
+    volatile LONG references;
+    DWORD error, bytes;
+    char body[16];
+};
+
+static void release_exit_request(struct exit_request *request) {
+    if (!InterlockedDecrement(&request->references)) {
+        if (request->ready)
+            CloseHandle(request->ready);
+        HeapFree(GetProcessHeap(), 0, request);
+    }
+}
+
+static void CALLBACK exit_callback(HINTERNET handle, DWORD_PTR context,
+                                   DWORD event, LPVOID info, DWORD length) {
+    (void)handle;
+    struct exit_request *request = (struct exit_request *)context;
+    if (!request)
+        return;
+    switch (event) {
+    case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+        // WinHTTP can still deliver callbacks after the caller closes the request.
+        release_exit_request(request);
+        return;
+    case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
+        request->error = ((WINHTTP_ASYNC_RESULT *)info)->dwError;
+        break;
+    case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
+        request->bytes = length;
+        request->error = 0;
+        break;
+    case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+    case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
+        request->error = 0;
+        break;
+    default:
+        return;
+    }
+    SetEvent(request->ready);
+}
+
+static DWORD wait_exit_request(struct exit_request *request, ULONGLONG deadline) {
+    ULONGLONG now = GetTickCount64();
+    if (now >= deadline)
+        return ERROR_WINHTTP_TIMEOUT;
+
+    HANDLE events[] = {stop_checks, request->ready};
+    DWORD result = stop_checks
+        ? WaitForMultipleObjects(ARRAYSIZE(events), events, FALSE, (DWORD)(deadline - now))
+        : WaitForSingleObject(request->ready, (DWORD)(deadline - now));
+    if (stop_checks && result == WAIT_OBJECT_0)
+        return ERROR_OPERATION_ABORTED;
+    if (result == WAIT_FAILED)
+        return GetLastError();
+    if (result == WAIT_TIMEOUT || GetTickCount64() >= deadline)
+        return ERROR_WINHTTP_TIMEOUT;
+    return request->error;
+}
+
+static DWORD read_exit_body(HINTERNET handle, struct exit_request *request,
+                            ULONGLONG deadline, char out[64]) {
     DWORD used = 0;
-    ULONGLONG deadline = GetTickCount64() + 3000;
-    while (used <= 15 && GetTickCount64() < deadline) {
-        DWORD n = 0;
-        if (!WinHttpReadData(request, out + used, 16 - used, &n))
-            return FALSE;
-        if (!n) {
-            out[used] = 0;
-            if (strlen(out) == used && ipv4_public(out))
-                return TRUE;
-            break;
+    // Require the complete bounded response. A partial read can look like an IP.
+    while (used < sizeof(request->body)) {
+        if (!WinHttpReadData(handle, request->body + used,
+                             (DWORD)sizeof(request->body) - used, NULL))
+            return GetLastError();
+        DWORD error = wait_exit_request(request, deadline);
+        if (error)
+            return error;
+        if (!request->bytes) {
+            request->body[used] = 0;
+            if (strlen(request->body) != used || !ipv4_public(request->body))
+                break;
+            strcpy_s(out, 64, request->body);
+            return 0;
         }
-        used += n;
+        used += request->bytes;
     }
-    SetLastError(ERROR_INVALID_DATA);
-    return FALSE;
+    return ERROR_INVALID_DATA;
 }
-static BOOL query_exit_host(const wchar_t *host, const wchar_t *path,
-                            char out[64]) {
+
+static DWORD query_exit_host(const struct exit_endpoint *endpoint, ULONGLONG deadline,
+                             struct exit_attempt *attempt, char out[64]) {
+    ULONGLONG started = GetTickCount64();
+    HINTERNET session = NULL, connection = NULL, handle = NULL;
+    DWORD error = ERROR_NOT_ENOUGH_MEMORY;
+    attempt->stage = "setup";
+    struct exit_request *request = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*request));
+    if (!request)
+        goto done;
+    request->references = 1;
+    request->ready = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!request->ready)
+        goto setup_error;
+
     wchar_t proxy[64];
-    swprintf_s(proxy, 64, L"127.0.0.1:%u", proxy_port);
-    HINTERNET s =
-        WinHttpOpen(L"ProxyHarbor/0.2", WINHTTP_ACCESS_TYPE_NAMED_PROXY, proxy,
-                    WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!s) {
-        network_error = GetLastError();
-        return FALSE;
+    swprintf_s(proxy, ARRAYSIZE(proxy), L"127.0.0.1:%u", proxy_port);
+    session = WinHttpOpen(L"ProxyHarbor/0.2", WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                          proxy, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
+    if (!session || !WinHttpSetTimeouts(session, EXIT_ATTEMPT_MS, EXIT_ATTEMPT_MS,
+                                       EXIT_ATTEMPT_MS, EXIT_ATTEMPT_MS))
+        goto setup_error;
+    connection = WinHttpConnect(session, endpoint->host, 443, 0);
+    if (!connection)
+        goto setup_error;
+    handle = WinHttpOpenRequest(connection, L"GET", endpoint->path, NULL,
+                               WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    DWORD disabled = WINHTTP_DISABLE_REDIRECTS;
+    DWORD_PTR context = (DWORD_PTR)request;
+    if (!handle || !WinHttpSetOption(handle, WINHTTP_OPTION_DISABLE_FEATURE, &disabled, sizeof(disabled)) ||
+        !WinHttpSetOption(handle, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context)) ||
+        WinHttpSetStatusCallback(handle, exit_callback, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS |
+                                 WINHTTP_CALLBACK_FLAG_HANDLES, 0) == WINHTTP_INVALID_STATUS_CALLBACK)
+        goto setup_error;
+    InterlockedIncrement(&request->references);
+    if (GetTickCount64() >= deadline) {
+        error = ERROR_WINHTTP_TIMEOUT;
+        goto done;
     }
-    WinHttpSetTimeouts(s, 3000, 3000, 3000, 3000);
-    HINTERNET c = WinHttpConnect(s, host, 443, 0),
-              r = c ? WinHttpOpenRequest(
-                          c, L"GET", path, NULL, WINHTTP_NO_REFERER,
-                          WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)
-                    : NULL;
-    BOOL ok = FALSE;
-    if (r) {
-        DWORD disabled = WINHTTP_DISABLE_REDIRECTS;
-        DWORD code = 0, size = sizeof(code);
-        if (WinHttpSetOption(r, WINHTTP_OPTION_DISABLE_FEATURE, &disabled,
-                             sizeof(disabled)) &&
-            WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                               WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-            WinHttpReceiveResponse(r, NULL) &&
-            WinHttpQueryHeaders(
-                r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                WINHTTP_HEADER_NAME_BY_INDEX, &code, &size,
-                WINHTTP_NO_HEADER_INDEX) &&
-            code == 200)
-            ok = read_exit_body(r, out);
-        network_error = ok ? 0 : GetLastError();
-        if (!ok && !network_error)
-            network_error = ERROR_INVALID_DATA;
-        WinHttpCloseHandle(r);
-    } else
-        network_error = GetLastError();
-    if (c)
-        WinHttpCloseHandle(c);
-    WinHttpCloseHandle(s);
-    return ok;
-}
-static BOOL query_exit(char out[64]) {
-    // Keep a single slow endpoint from ending a healthy session. The first
-    // target is the historical probe; the second is a fallback. Each attempt
-    // is capped at 3s so two targets still fit inside one check period.
-    static const wchar_t *hosts[] = {L"api.ipify.org", L"ifconfig.me"};
-    static const wchar_t *paths[] = {L"/", L"/ip"};
-    DWORD first_error = 0;
-    for (unsigned i = 0; i < ARRAYSIZE(hosts); ++i) {
-        if (query_exit_host(hosts[i], paths[i], out))
-            return TRUE;
-        if (!first_error)
-            first_error = network_error;
+    if (stop_checks && WaitForSingleObject(stop_checks, 0) == WAIT_OBJECT_0) {
+        error = ERROR_OPERATION_ABORTED;
+        goto done;
     }
-    network_error = first_error ? first_error : ERROR_NETWORK_UNREACHABLE;
-    return FALSE;
+
+    attempt->stage = "send_request";
+    if (!WinHttpSendRequest(handle, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, context))
+        goto setup_error;
+    error = wait_exit_request(request, deadline);
+    if (error)
+        goto done;
+
+    attempt->stage = "response_headers";
+    if (!WinHttpReceiveResponse(handle, NULL))
+        goto setup_error;
+    error = wait_exit_request(request, deadline);
+    if (error)
+        goto done;
+
+    DWORD size = sizeof(attempt->http_status);
+    if (!WinHttpQueryHeaders(handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &attempt->http_status,
+                             &size, WINHTTP_NO_HEADER_INDEX))
+        goto setup_error;
+    if (attempt->http_status != 200) {
+        error = ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
+        goto done;
+    }
+    attempt->stage = "response_body";
+    error = read_exit_body(handle, request, deadline, out);
+    if (!error)
+        attempt->stage = "complete";
+    goto done;
+
+setup_error:
+    error = GetLastError();
+    if (!error)
+        error = ERROR_INVALID_DATA;
+done:
+    attempt->elapsed = (DWORD)(GetTickCount64() - started);
+    attempt->error = error;
+    if (handle)
+        WinHttpCloseHandle(handle);
+    if (connection)
+        WinHttpCloseHandle(connection);
+    if (session)
+        WinHttpCloseHandle(session);
+    if (request)
+        release_exit_request(request);
+    return error;
 }
-static BOOL exit_ok(BOOL initial) {
+
+static DWORD query_exit(char out[64], struct exit_report *report, ULONGLONG deadline) {
+    ULONGLONG started = GetTickCount64();
+    DWORD error = ERROR_WINHTTP_TIMEOUT;
+    for (unsigned i = 0; i < ARRAYSIZE(exit_endpoints); ++i) {
+        ULONGLONG now = GetTickCount64();
+        if (now >= deadline)
+            break;
+        ULONGLONG attempt_deadline = now + EXIT_ATTEMPT_MS;
+        if (attempt_deadline > deadline)
+            attempt_deadline = deadline;
+        DWORD result = query_exit_host(&exit_endpoints[i], attempt_deadline,
+                                       &report->attempts[report->count++], out);
+        if (!i || !result || result == ERROR_OPERATION_ABORTED)
+            error = result;
+        if (!result || result == ERROR_OPERATION_ABORTED)
+            break;
+    }
+    report->elapsed = (DWORD)(GetTickCount64() - started);
+    return error;
+}
+
+// Called with the exit lock held. A late probe cannot extend an expired window.
+static void expire_exit(ULONGLONG now) {
+    if (!lab && exit_health.fault == EXIT_HEALTHY &&
+        (!exit_health.last_check || now - exit_health.last_check >= EXIT_MAX_AGE_MS))
+        exit_health.fault = EXIT_EXPIRED;
+}
+
+static struct exit_health record_exit_round(BOOL initial, BOOL success, BOOL mismatch,
+                                            ULONGLONG completed, const SYSTEMTIME *checked_at) {
+    AcquireSRWLockExclusive(&exit_lock);
+    if (!initial)
+        expire_exit(completed);
+    if (exit_health.fault == EXIT_HEALTHY) {
+        if (success && !mismatch) {
+            exit_health.last_check = completed;
+            exit_health.last_success_at = *checked_at;
+            exit_health.failures = 0;
+        } else {
+            ++exit_health.failures;
+            if (mismatch)
+                exit_health.fault = EXIT_MISMATCH;
+            else if (initial)
+                exit_health.fault = EXIT_START_FAILED;
+            else if (exit_health.failures >= 2)
+                exit_health.fault = EXIT_REPEATED_FAILURE;
+        }
+    }
+    struct exit_health health = exit_health;
+    ReleaseSRWLockExclusive(&exit_lock);
+    if (health.fault != EXIT_HEALTHY && exit_alarm)
+        SetEvent(exit_alarm);
+    return health;
+}
+
+static void write_exit_report(const char *observed, DWORD error, BOOL matches,
+                              const struct exit_report *report, const SYSTEMTIME *checked_at,
+                              const struct exit_health *health) {
+    if (!directory[0])
+        return;
+    char checked[32], last_success[32], attempts[320] = "", result[1024];
+    exit_timestamp(checked, checked_at);
+    exit_timestamp(last_success, &health->last_success_at);
+    size_t used = 0;
+    for (unsigned i = 0; i < report->count; ++i) {
+        const struct exit_attempt *attempt = &report->attempts[i];
+        int written = sprintf_s(attempts + used, sizeof(attempts) - used,
+            "%s{\"endpoint\":\"%s\",\"stage\":\"%s\",\"elapsedMs\":%lu,\"error\":%lu,\"httpStatus\":%lu}",
+            i ? "," : "", exit_endpoints[i].name, attempt->stage, attempt->elapsed,
+            attempt->error, attempt->http_status);
+        if (written < 0)
+            return;
+        used += (size_t)written;
+    }
+    sprintf_s(result, sizeof(result),
+        "{\"proxySucceeded\":%s,\"proxyError\":%lu,\"path\":\"explicit_proxy_only\","
+        "\"expected\":\"%s\",\"observed\":\"%s\",\"matchesExpected\":%s,\"failures\":%u,"
+        "\"checkedAt\":\"%s\",\"lastSuccessAt\":\"%s\",\"stopCause\":\"%s\","
+        "\"elapsedMs\":%lu,\"attempts\":[%s]}\n",
+        error ? "false" : "true", error, expected_exit, error ? "" : observed,
+        matches ? "true" : "false", health->failures, checked, last_success,
+        exit_stop_cause(health->fault), report->elapsed, attempts);
+    if (write_file(L"exit-check.tmp", result)) {
+        wchar_t from[1200], to[1200];
+        path_for(from, ARRAYSIZE(from), L"exit-check.tmp");
+        path_for(to, ARRAYSIZE(to), L"exit-check.json");
+        MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    }
+    // Retain the most recent failed round even after a retry succeeds.
+    if ((error || !matches) && write_file(L"exit-failure.tmp", result)) {
+        wchar_t from[1200], to[1200];
+        path_for(from, ARRAYSIZE(from), L"exit-failure.tmp");
+        path_for(to, ARRAYSIZE(to), L"exit-failure.json");
+        MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    }
+}
+
+static BOOL exit_ok(BOOL initial, DWORD *startup_error) {
     if (lab) {
         if (initial)
             strcpy_s(observed_exit, 64, "fixture");
         return TRUE;
     }
-    // Managed images can only reach the explicit HTTP entrance. A separate
-    // transparent-TUN probe is diagnostic and cannot certify these images.
-    char proxy[64] = {0};
-    BOOL proxy_ok = query_exit(proxy);
-    DWORD proxy_error = network_error;
-    const char *baseline = expected_exit[0] ? expected_exit : observed_exit;
-    BOOL mismatch = proxy_ok && baseline[0] && strcmp(proxy, baseline) != 0;
-    LONG failures = 0;
-    if (!proxy_ok || mismatch) {
-        failures = InterlockedIncrement(&exit_failures);
-        // A wrong exit address is a hard fault. During a running session a
-        // single failed probe is only recorded; a second consecutive failure
-        // still stops the session. Startup checks and exit mismatches never
-        // tolerate a failure.
-        if (initial || mismatch || failures >= 2) {
-            // Wake enforcement before any diagnostic file write or flush.
-            InterlockedExchange(&exit_fault,
-                                mismatch ? EXIT_MISMATCH : EXIT_UNVERIFIED);
-            if (exit_alarm)
-                SetEvent(exit_alarm);
-        }
-    } else {
-        InterlockedExchange(&exit_failures, 0);
-        InterlockedExchange64(&last_exit_check, (LONG64)GetTickCount64());
+
+    ULONGLONG deadline = GetTickCount64() + EXIT_ATTEMPT_MS * ARRAYSIZE(exit_endpoints);
+    if (!initial) {
+        ULONGLONG expires = exit_snapshot().last_check + EXIT_MAX_AGE_MS;
+        if (expires < deadline)
+            deadline = expires;
     }
-    if (directory[0]) {
-        char result[512];
-        SYSTEMTIME now;
-        GetSystemTime(&now);
-        sprintf_s(
-            result, sizeof(result),
-            "{\"proxySucceeded\":%s,\"proxyError\":%lu,\"path\":"
-            "\"explicit_proxy_only\",\"expected\":\"%s\",\"observed\":\"%s\","
-            "\"matchesExpected\":%s,\"failures\":%ld,\"checkedAt\":\"%04u-%02u-%02uT%02u:%02u:%"
-            "02uZ\"}\n",
-            proxy_ok ? "true" : "false", proxy_error, expected_exit,
-            proxy_ok ? proxy : "",
-            proxy_ok && expected_exit[0] && !strcmp(proxy, expected_exit)
-                ? "true"
-                : "false",
-            (long)failures,
-            now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute,
-            now.wSecond);
-        if (write_file(L"exit-check.tmp", result)) {
-            wchar_t from[1200], to[1200];
-            path_for(from, _countof(from), L"exit-check.tmp");
-            path_for(to, _countof(to), L"exit-check.json");
-            MoveFileExW(from, to,
-                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-        }
-    }
-    if (!proxy_ok) {
-        // Keep the periodic checker alive after one transient timeout.
-        return initial ? FALSE : failures < 2;
-    }
-    if (mismatch) {
-        network_error = ERROR_INVALID_DATA;
+    char observed[64] = {0};
+    struct exit_report report = {0};
+    DWORD error = query_exit(observed, &report, deadline);
+    if (error == ERROR_OPERATION_ABORTED)
         return FALSE;
+
+    const char *baseline = expected_exit[0] ? expected_exit : observed_exit;
+    BOOL mismatch = !error && baseline[0] && strcmp(observed, baseline) != 0;
+    SYSTEMTIME checked_at;
+    GetSystemTime(&checked_at);
+    struct exit_health health = record_exit_round(initial, !error, mismatch, GetTickCount64(), &checked_at);
+    if (initial) {
+        *startup_error = mismatch ? ERROR_INVALID_DATA : error;
+        if (health.fault == EXIT_HEALTHY)
+            strcpy_s(observed_exit, 64, observed);
     }
-    if (initial)
-        strcpy_s(observed_exit, 64, proxy);
-    return TRUE;
+    write_exit_report(observed, error, !error && !mismatch, &report, &checked_at, &health);
+    return health.fault == EXIT_HEALTHY;
 }
+
 static const char *exit_stop_reason(void) {
-    LONG fault = InterlockedCompareExchange(&exit_fault, 0, 0);
+    AcquireSRWLockExclusive(&exit_lock);
+    expire_exit(GetTickCount64());
+    enum exit_fault fault = exit_health.fault;
+    ReleaseSRWLockExclusive(&exit_lock);
     if (fault == EXIT_MISMATCH)
         return "exit_mismatch";
-    if (fault == EXIT_UNVERIFIED)
-        return "exit_unverified";
-    ULONGLONG last = (ULONGLONG)InterlockedCompareExchange64(&last_exit_check, 0, 0);
-    if (!lab && (!last || GetTickCount64() - last >= 30000))
-        return "exit_unverified";
-    return NULL;
+    return fault == EXIT_HEALTHY ? NULL : "exit_unverified";
 }
 static DWORD events_begin(void) {
     FWP_VALUE0 *v = NULL;
@@ -988,9 +1188,21 @@ static BOOL events_restore(void) {
 }
 static DWORD WINAPI check_exits(LPVOID unused) {
     (void)unused;
-    while (WaitForSingleObject(stop_checks, 10000) == WAIT_TIMEOUT)
-        if (!exit_ok(FALSE))
+    if (lab)
+        return 0;
+    ULONGLONG next = exit_snapshot().last_check + EXIT_INTERVAL_MS;
+    for (;;) {
+        ULONGLONG now = GetTickCount64();
+        DWORD wait = next > now ? (DWORD)(next - now) : 0;
+        if (WaitForSingleObject(stop_checks, wait) != WAIT_TIMEOUT)
             break;
+        ULONGLONG started = GetTickCount64();
+        if (!exit_ok(FALSE, NULL))
+            break;
+        next = exit_snapshot().failures
+            ? GetTickCount64() + EXIT_RETRY_MS
+            : started + EXIT_INTERVAL_MS;
+    }
     return 0;
 }
 static DWORD load_events_previous(void) {
@@ -1959,7 +2171,10 @@ int wmain(int argc, wchar_t **argv) {
         DWORD pid = 0;
         ULONGLONG born = 0;
         BOOL recognized = v2rayn_owner(&pid, &born);
-        BOOL observed = recognized && query_exit(observed_exit);
+        struct exit_report report = {0};
+        BOOL observed = recognized &&
+            !query_exit(observed_exit, &report,
+                        GetTickCount64() + EXIT_ATTEMPT_MS * ARRAYSIZE(exit_endpoints));
         BOOL tun_ready = tun_ok(TRUE);
         printf("{\"systemChanged\":false,\"recognizedListener\":%s,"
                "\"proxyListenerPid\":%lu,\"exitVerified\":false,"
@@ -2206,9 +2421,8 @@ int wmain(int argc, wchar_t **argv) {
             goto finish;
         }
     }
-    if (!exit_ok(TRUE)) {
-        error_code = network_error ? network_error : ERROR_NETWORK_UNREACHABLE;
-        reason = exit_fault == EXIT_MISMATCH ? "exit_mismatch_before_launch" : "exit_not_verified";
+    if (!exit_ok(TRUE, &error_code)) {
+        reason = exit_snapshot().fault == EXIT_MISMATCH ? "exit_mismatch_before_launch" : "exit_not_verified";
         goto finish;
     }
     if (user_identity) {
@@ -2364,6 +2578,8 @@ int wmain(int argc, wchar_t **argv) {
         }
     }
 finish:
+    if (stop_checks)
+        SetEvent(stop_checks);
 #ifdef PH_CLAUDE_TAKEOVER
     if (current_user && !running && !recover && error_code) {
         char report[224];
@@ -2528,8 +2744,6 @@ release:
     if (current_user)
         ClaudeTakeoverRelease(&takeover);
 #endif
-    if (stop_checks)
-        SetEvent(stop_checks);
     if (exit_thread) {
         WaitForSingleObject(exit_thread, INFINITE);
         CloseHandle(exit_thread);

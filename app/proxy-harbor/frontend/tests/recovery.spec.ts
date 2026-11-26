@@ -17,7 +17,7 @@ for (const [label, content] of [['malformed JSON', 'invalid configuration\r\n'],
    await expect(page.getByRole('button', { name: '导出报告', exact: true })).toHaveCount(0)
    const reset = page.getByRole('button', { name: '备份并重置配置', exact: true })
    await expect(reset).toBeDisabled()
-   await page.getByRole('checkbox', { name: '我确认备份原文件，并重置当前代理配置和应用路径' }).check()
+   await page.getByRole('checkbox', { name: '我确认备份原文件，并重置当前配置' }).check()
    await page.getByRole('button', { name: '重新读取配置', exact: true }).click()
    await expect(reset).toBeDisabled()
    await page.getByRole('checkbox').check()

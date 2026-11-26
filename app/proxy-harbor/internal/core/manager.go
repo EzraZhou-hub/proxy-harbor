@@ -4,8 +4,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"proxyharbor/internal/control"
 	"proxyharbor/internal/diagnostics"
 	"proxyharbor/internal/domain"
@@ -59,19 +57,11 @@ func (m *Manager) loadConfigLocked() {
 		return
 	}
 	m.config = config
-	m.config.Applications = make([]domain.TargetApplication, 0, 2)
-	chromePresent := false
+	m.config.Applications = nil
 	for _, app := range config.Applications {
-		if app.ID == "codex" {
-			continue // Read legacy files without carrying Codex into the desktop configuration.
+		if app.ID == "claude" {
+			m.config.Applications = append(m.config.Applications, app)
 		}
-		m.config.Applications = append(m.config.Applications, app)
-		if app.ID == "chrome" {
-			chromePresent = true
-		}
-	}
-	if !chromePresent {
-		m.config.Applications = append(m.config.Applications, domain.TargetApplication{ID: "chrome", Name: "Google Chrome", Compatibility: "unverified"})
 	}
 }
 func (m *Manager) record(level, message string) {
@@ -88,22 +78,13 @@ func (m *Manager) snapshotLocked() domain.Snapshot {
 	if config.SelectedProfileID == "" {
 		blockers = append(blockers, "尚未选择代理配置")
 	}
-	configured := false
-	for _, app := range config.Applications {
-		if app.Executable != "" {
-			configured = true
-		}
-	}
-	if !configured {
-		blockers = append(blockers, "尚未登记应用路径")
-	}
 	startup := domain.StartupStatus{BackupPath: m.backupPath}
 	if m.loadError != nil {
 		startup.Error = m.loadError.Error()
 		_, recoverable := m.repository.(recoveryRepository)
 		startup.CanReset = recoverable && errors.Is(m.loadError, domain.ErrInvalidConfig)
 	}
-	return domain.Snapshot{Version: "0.1.0", Startup: startup, Config: config, ConfigPath: m.repository.Path(), Engine: m.engine.Describe(),
+	return domain.Snapshot{Version: "1.2.3", Startup: startup, Config: config, ConfigPath: m.repository.Path(), Engine: m.engine.Describe(),
 		Protection: domain.ProtectionStatus{State: "unavailable", CanStart: false, Blockers: blockers}, Environment: m.environment,
 		Checks: diagnostics.PendingChecks(), Logs: append([]domain.LogEntry{}, m.logs...)}
 }
@@ -239,30 +220,6 @@ func (m *Manager) SelectProxy(id string) (domain.Snapshot, error) {
 	next := m.config
 	next.SelectedProfileID = id
 	return m.commit(next, "已选择代理配置，网络保护仍未开启。")
-}
-func (m *Manager) ConfigureApplication(id, path string) (domain.Snapshot, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	path = strings.TrimSpace(path)
-	if path != "" {
-		if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Ext(path), ".exe") {
-			return domain.Snapshot{}, errors.New("请选择绝对路径下的 .exe 文件")
-		}
-		file, err := os.Stat(path)
-		if err != nil || file.IsDir() {
-			return domain.Snapshot{}, errors.New("应用文件不存在或无法访问，请确认完整路径")
-		}
-	}
-	next := m.config
-	next.Applications = append([]domain.TargetApplication{}, m.config.Applications...)
-	for index, app := range next.Applications {
-		if app.ID == id {
-			next.Applications[index].Executable = path
-			next.Applications[index].Compatibility = "unverified"
-			return m.commit(next, "应用路径已保存，未启动应用；联网组件仍待验证。")
-		}
-	}
-	return domain.Snapshot{}, errors.New("不支持的应用")
 }
 func (m *Manager) RefreshEnvironment() domain.Snapshot {
 	env := diagnostics.CollectLocal()

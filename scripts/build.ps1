@@ -24,8 +24,8 @@ try {
     if ($Check) {
         go test ./...
         Assert-Exit 'Go tests'
-        npm.cmd run test:unit --prefix frontend
-        Assert-Exit 'Frontend draft regression tests'
+        npm.cmd run check --prefix frontend
+        Assert-Exit 'Frontend type check'
     }
     if ($E2E) {
         go build -tags server -o bin/proxy-harbor-server.exe .

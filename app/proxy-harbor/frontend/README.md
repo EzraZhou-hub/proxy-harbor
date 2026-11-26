@@ -1,18 +1,17 @@
-# Vue 3 + TypeScript + Vite
+# Proxy Harbor 前端
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Vue 3、TypeScript 与 Vite 界面，通过 Wails 调用真实 Go 后端。主要入口是 [Workspace.vue](src/Workspace.vue)，涵盖连接概览、应用及域名参考、代理配置和诊断日志。
 
-## Recommended IDE Setup
+- [src/api.ts](src/api.ts) 导出 Wails 后端绑定与模型类型。
+- [bindings](bindings/) 由 Wails 生成，并随源码提交。修改 Go 绑定方法或模型后运行桌面构建重生成。
+- [tests](tests/) 包含 Playwright 回归。测试使用本机回环服务、隔离配置和受管状态模拟。
 
-- [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur) + [TypeScript Vue Plugin (Volar)](https://marketplace.visualstudio.com/items?itemName=Vue.vscode-typescript-vue-plugin).
+在当前目录可执行以下命令，Node.js 版本要求见[桌面开发说明](../README.md#开发环境)。
 
-## Type Support For `.vue` Imports in TS
+```powershell
+npm.cmd ci
+npm.cmd run check
+npm.cmd run build
+```
 
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [TypeScript Vue Plugin (Volar)](https://marketplace.visualstudio.com/items?itemName=Vue.vscode-typescript-vue-plugin) to make the TypeScript language service aware of `.vue` types.
-
-If the standalone TypeScript plugin doesn't feel fast enough to you, Volar has also implemented a [Take Over Mode](https://github.com/johnsoncodehk/volar/discussions/471#discussioncomment-1361669) that is more performant. You can enable it by the following steps:
-
-1. Disable the built-in TypeScript Extension
-   1. Run `Extensions: Show Built-in Extensions` from VSCode's command palette
-   2. Find `TypeScript and JavaScript Language Features`, right click and select `Disable (Workspace)`
-2. Reload the VSCode window by running `Developer: Reload Window` from the command palette.
+日常开发从仓库根目录运行 `scripts\dev.ps1`，由 Wails 同时启动桌面和前端。应用级回归从仓库根目录运行 `scripts\build.ps1 -Check -E2E`。Playwright 会用 Microsoft Edge 访问本机测试后端，测试主机固定在 `127.0.0.1:19345`，配置恢复用例还使用相邻的回环端口。

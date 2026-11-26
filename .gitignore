@@ -9,4 +9,5 @@
 .workbuddy/
 *.log
 **/wails_windows_*.syso
+**/compile-guardian.cmd
 **/build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

@@ -4,37 +4,22 @@ import { Events } from '@wailsio/runtime'
 import Icon from './components/AppIcon.vue'
 import DomainReference from './components/DomainReference.vue'
 import { backend, type Snapshot, type ProxyProfile, type ManagedSession } from './api'
-import { mergeApplicationPaths, type SubmittedPath } from './application-drafts'
 
-type Page = 'overview' | 'applications' | 'proxies' | 'validation' | 'diagnostics'
+type Page = 'overview' | 'applications' | 'proxies' | 'diagnostics'
 const page = ref<Page>('overview')
 const navigation = [
  { id: 'overview' as Page, name: '连接概览', icon: 'grid', description: '启动 Claude Desktop 隔离会话，查看守护状态并设置固定出口。' },
- { id: 'applications' as Page, name: '应用管理', icon: 'apps', description: '查看保护范围并登记应用程序路径。' },
+ { id: 'applications' as Page, name: '应用管理', icon: 'apps', description: '查看受保护的应用和域名参考。' },
  { id: 'proxies' as Page, name: '代理配置', icon: 'proxy', description: '管理常用代理入口。隔离会话使用 v2rayN 的本地 HTTP 入口。' },
- { id: 'validation' as Page, name: '本机验证', icon: 'shield', description: '使用独立 Chrome 窗口验证当前代理、TUN 和固定出口。' },
  { id: 'diagnostics' as Page, name: '诊断与日志', icon: 'activity', description: '核对退出原因、出口观测和本机环境。' },
 ]
 const currentPage = computed(() => navigation.find(item => item.id === page.value)!)
 const snapshot = ref<Snapshot | null>(null)
 type SessionAction = 'start' | 'stop' | 'recover'
-type CookieKind = 'chrome' | 'flash'
-const cookieActions = {
- chrome: {
-  label: '清除 Cookies',
-  detail: '清除当前 Windows 用户的 Google Chrome 标准个人资料中的网站 Cookies。请先完全退出 Chrome。',
-  effect: '清除后，部分网站需要重新登录。',
- },
- flash: {
-  label: '清除 Flash Cookies',
-  detail: '清除当前 Windows 用户的旧 Flash 共享对象，以及 Chrome 个人资料里的 Flash 残留。请先关闭 Chrome 和使用 Flash 的程序。',
-  effect: '清除后，旧 Flash 应用的网站偏好和本地存档可能丢失。',
- },
-}
+const flashCleanupDetail = '清除当前 Windows 用户的独立 Flash 共享对象。请先关闭使用 Flash 的程序。'
 const cookieToolsAvailable = ref(false)
 const cookieDialog = ref<HTMLDialogElement | null>(null)
-const cookieSelection = ref<CookieKind | null>(null)
-const cleaningCookies = ref<CookieKind | null>(null)
+const cleaningCookies = ref(false)
 const cookieFeedback = ref<{ message: string; failed: boolean } | null>(null)
 const managed = ref<ManagedSession | null>(null)
 const managedBusy = ref<SessionAction | null>(null)
@@ -47,6 +32,7 @@ let statusRead = 0
 let pollInProgress = false
 const status = computed(() => managed.value?.state ?? 'idle')
 const managedActive = computed(() => ['preparing', 'monitoring', 'blocking'].includes(status.value))
+const exitRetrying = computed(() => status.value === 'monitoring' && managed.value?.exitState === 'retrying')
 const needsRecovery = computed(() => status.value === 'cleanup_required')
 const abnormalStop = computed(() => status.value === 'stopped' &&
  !['user_stopped', 'application_exited', 'desktop_exited', 'recovered'].includes(managed.value?.reason ?? ''))
@@ -59,31 +45,28 @@ const managedLabel = computed(() => {
  if (statusIssue.value) return '状态读取失败'
  if (stopRequested.value && status.value !== 'blocking') return '正在结束会话'
  if (abnormalStop.value) return '会话异常结束'
+ if (exitRetrying.value) return '正在复核出口'
  return statusLabels[status.value] ?? '未受保护'
 })
 const sessionTone = computed(() => {
- if (statusIssue.value || needsRecovery.value || abnormalStop.value || status.value === 'failed') return 'warning'
+ if (statusIssue.value || needsRecovery.value || abnormalStop.value || status.value === 'failed' || exitRetrying.value) return 'warning'
  if (stopRequested.value) return 'working'
  if (status.value === 'monitoring') return 'good'
  if (managedActive.value) return 'working'
  return 'neutral'
 })
-const managedTarget = computed(() => applications.value.find(app => app.id === 'chrome'))
 const claudeSession = computed(() => managed.value?.applicationId === 'claude')
 const savedExit = computed(() => snapshot.value?.config.expectedProxyIPv4 ?? '')
 const exitDirty = computed(() => expectedExit.value !== savedExit.value)
-const waitingForSetup = computed(() => !!managed.value?.available && (!savedExit.value || exitDirty.value || !managedTarget.value?.executable))
-const sessionStartUnavailable = computed(() => !managed.value?.available || statusIssue.value || busy.value ||
- !!managedBusy.value || managedActive.value || needsRecovery.value || !!cleaningCookies.value)
-const startBlocked = computed(() => sessionStartUnavailable.value || waitingForSetup.value)
-const claudeStartBlocked = computed(() => sessionStartUnavailable.value || !savedExit.value || exitDirty.value)
+const claudeStartBlocked = computed(() => !managed.value?.available || statusIssue.value || busy.value ||
+ !!managedBusy.value || managedActive.value || needsRecovery.value || cleaningCookies.value ||
+ !savedExit.value || exitDirty.value)
 const sessionConfigLocked = computed(() => managedActive.value || !!managedBusy.value || needsRecovery.value)
 const sessionDescription = computed(() => {
  if (statusIssue.value) return '正在重试读取守护状态。'
  if (stopRequested.value && status.value !== 'blocking') return '已请求结束会话，正在核对清理状态。'
  if (!managed.value) return '正在读取本机守护程序状态。'
  if (!managed.value.available || status.value !== 'idle') return managed.value.detail
- if (!managedTarget.value?.executable) return '请先登记 Google Chrome 的程序路径。'
  if (!savedExit.value) return '请保存 v2rayN 节点的固定公网 IPv4。'
  if (exitDirty.value) return '有尚未保存的出口 IPv4，请先保存。'
  return '已准备启动隔离窗口。启动时将核对 v2rayN、TUN 和固定出口。'
@@ -95,10 +78,10 @@ const sessionChecks = computed(() => {
  const active = !statusIssue.value && status.value === 'monitoring'
  const dns = statusIssue.value ? '状态未知' : managed.value?.dns === 'system_blocked' ? '全机临时限制' : managed.value?.dns === 'restored' ? '限制已解除' : '待启动'
  return [
-  {id:'exit',name:'代理出口',state:active && managed.value?.proxyExit ? '已核对':'未运行',detail:active ? `本次出口 ${managed.value?.proxyExit || '待核对'}；变化或无法核对时结束会话。`:'启动后核对本次代理的公网 IPv4 出口。'},
+  {id:'exit',name:'代理出口',state:active ? (exitRetrying.value ? '正在复核' : managed.value?.proxyExit ? '已核对' : '待核对') : '未运行',
+   detail:active ? `上次核验通过的出口 ${managed.value?.proxyExit || '待核对'}。出口不匹配时立即阻断。` : '启动前和运行中核对指定代理的公网 IPv4 出口。'},
   {id:'rules',name:'连接限制',state:active && (managed.value?.filterCount ?? 0)>0 ? '已安装':'未运行',detail:active ? `本次 ${managed.value?.filterCount} 条限制，只允许指定代理入口；IPv6 和 UDP 阻断。`:'启动应用前安装独立限制，故障时先阻断再终止。'},
   {id:'dns',name:'系统 DNS',state:dns,detail:'保护期间限制全机传统 DNS 和 Windows DNS 服务出站。异常残留可在概览执行恢复。'},
-  {id:'webrtc',name:'WebRTC',state:active && managed.value?.applicationId === 'chrome' ? '浏览器策略已核对' : '待启动',detail:'限制本地 IP 候选，阻断受管程序的非代理 UDP 和 IPv6 连接。'},
  ]
 })
 async function refreshManaged() {
@@ -145,52 +128,39 @@ const pollingPaused = ref(false)
 let stopTrayEvents: (() => void) | undefined
 const formName = ref<HTMLInputElement | null>(null)
 const form = reactive<ProxyProfile>({ id: '', name: '', protocol: 'http', host: '', port: 7890 })
-const paths = reactive<Record<string, string>>({})
 const resetConfirmed = ref(false)
 const profiles = computed(() => snapshot.value?.config.profiles ?? [])
-const applications = computed(() => snapshot.value?.config.applications ?? [])
-const orderedApps = computed(() => ['claude', 'chrome'].flatMap(id => applications.value.filter(app => app.id === id)))
 const selected = computed(() => profiles.value.find(item => item.id === snapshot.value?.config.selectedProfileId))
 async function openExitSetup() {
  page.value = 'overview'
  await nextTick()
  exitInput.value?.focus()
 }
-async function openChromePath() {
- page.value = 'applications'
- await nextTick()
- document.getElementById('path-chrome')?.focus()
-}
-function accept(value: Snapshot, submitted?: SubmittedPath) {
+function accept(value: Snapshot) {
  const previousExit = snapshot.value?.config.expectedProxyIPv4 ?? ''
  if (!snapshot.value || expectedExit.value === previousExit) expectedExit.value = value.config.expectedProxyIPv4 ?? ''
- mergeApplicationPaths(paths, snapshot.value?.config.applications ?? [], value.config.applications ?? [], submitted)
  snapshot.value = value
 }
 function messageOf(value: unknown) { return value instanceof Error ? value.message : String(value) }
-async function confirmCookieCleanup(kind: CookieKind) {
+function confirmCookieCleanup() {
  if (sessionConfigLocked.value || cleaningCookies.value) return
- cookieSelection.value = kind
- await nextTick()
  cookieDialog.value?.showModal()
 }
 async function clearCookies() {
- const kind = cookieSelection.value
- if (!kind || cleaningCookies.value || sessionConfigLocked.value) return
+ if (cleaningCookies.value || sessionConfigLocked.value) return
  cookieDialog.value?.close()
- cleaningCookies.value = kind
+ cleaningCookies.value = true
  cookieFeedback.value = null
  try {
-  const deleted = Number(await backend.ClearBrowserCookies(kind, true))
-  const label = kind === 'chrome' ? 'Chrome Cookie' : 'Flash Cookie'
-  cookieFeedback.value = { message: deleted ? `已清除 ${deleted} 个 ${label} 文件。` : `未找到可清除的 ${label} 文件。`, failed: false }
+  const deleted = Number(await backend.ClearBrowserCookies('flash', true))
+  cookieFeedback.value = { message: deleted ? `已清除 ${deleted} 个 Flash Cookie 文件。` : '未找到可清除的 Flash Cookie 文件。', failed: false }
  } catch (cause) { cookieFeedback.value = { message: messageOf(cause), failed: true } }
- finally { cleaningCookies.value = null }
+ finally { cleaningCookies.value = false }
 }
-async function run(action: () => Promise<Snapshot>, success = '', submitted?: SubmittedPath) {
+async function run(action: () => Promise<Snapshot>, success = '') {
  if (busy.value) return
  busy.value = true; error.value = ''; notice.value = ''
- try { accept(await action(), submitted); notice.value = success } catch (cause) { error.value = messageOf(cause) }
+ try { accept(await action()); notice.value = success } catch (cause) { error.value = messageOf(cause) }
  finally { busy.value = false }
 }
 async function load() { loading.value = true; await run(() => backend.Snapshot()); loading.value = false }
@@ -202,17 +172,6 @@ async function editProxy(profile?: ProxyProfile) {
 async function saveProxy() {
  await run(() => backend.SaveProxy({ ...form, port: Number(form.port) }), '代理入口已保存，尚未进行连接测试。')
  if (!error.value) dialog.value = false
-}
-async function chooseApp(id: string) {
- if (busy.value) return
- error.value = ''
- try { const path = await backend.ChooseExecutable(); if (path) paths[id] = path }
- catch (cause) { error.value = messageOf(cause) }
-}
-async function saveApplication(id: string) {
- if (id === 'chrome' && sessionConfigLocked.value) return
- const path = paths[id] ?? ''
- await run(() => backend.ConfigureApplication(id, path), '应用路径已保存。', { id, path })
 }
 async function saveExpectedExit() {
  if (sessionConfigLocked.value || !exitDirty.value) return
@@ -228,10 +187,7 @@ async function openConfigDirectory() {
 }
 async function resetConfiguration() {
  await run(() => backend.ResetConfiguration(resetConfirmed.value), '原配置已备份，已恢复默认配置。')
- if (!error.value) {
-  resetConfirmed.value = false
-  for (const app of snapshot.value?.config.applications ?? []) paths[app.id] = app.executable
- }
+ if (!error.value) resetConfirmed.value = false
 }
 async function reloadConfiguration() {
  resetConfirmed.value = false
@@ -278,7 +234,7 @@ onUnmounted(() => {
      <Icon :name="item.icon" :size="19" /><span>{{ item.name }}</span>
     </button>
    </nav>
-   <div class="sidebar-version"><span>桌面版</span><span class="mono">v{{ snapshot?.version ?? '0.1.0' }}</span></div>
+   <div class="sidebar-version"><span>桌面版</span><span v-if="snapshot" class="mono">v{{ snapshot.version }}</span></div>
   </aside>
 
   <main>
@@ -289,9 +245,6 @@ onUnmounted(() => {
     </button>
     <button v-else-if="page === 'diagnostics'" class="button" :disabled="!snapshot || !!snapshot.startup.error || busy" @click="downloadReport">
      <Icon name="download" :size="17" />导出报告
-    </button>
-    <button v-else-if="page === 'validation' && snapshot && !snapshot.startup.error" class="button" @click="page = 'diagnostics'">
-     <Icon name="activity" :size="17" />查看会话诊断
     </button>
    </header>
 
@@ -319,33 +272,34 @@ onUnmounted(() => {
      <button class="button" :disabled="busy" @click="openConfigDirectory"><Icon name="folder" :size="16" />打开配置目录</button>
     </div>
     <template v-if="snapshot.startup.canReset">
-     <label class="reset-confirmation"><input v-model="resetConfirmed" type="checkbox" :disabled="busy" />我确认备份原文件，并重置当前代理配置和应用路径</label>
+     <label class="reset-confirmation"><input v-model="resetConfirmed" type="checkbox" :disabled="busy" />我确认备份原文件，并重置当前配置</label>
      <button class="button primary" :disabled="busy || !resetConfirmed" @click="resetConfiguration">备份并重置配置</button>
     </template>
     <p v-else>当前错误无法通过重置恢复，请检查文件访问权限后重试。</p>
    </section>
 
    <template v-else-if="page === 'overview'">
-    <section class="session-hero claude-hero" :data-tone="claudeSession ? sessionTone : undefined" aria-labelledby="claude-title">
+    <section class="session-hero claude-hero" aria-labelledby="claude-title">
      <div class="session-intro">
       <div class="session-label"><Icon name="shield" :size="18" />隔离保护</div>
       <h2 id="claude-title">Claude Desktop</h2>
-      <p v-if="claudeSession || needsRecovery" aria-live="polite">{{ managedLabel }} · {{ sessionDescription }}</p>
+      <p v-if="claudeSession || managedActive || needsRecovery" aria-live="polite">{{ managedLabel }} · {{ sessionDescription }}</p>
       <p v-else>通过固定代理出口启动本机安装的 Claude Desktop。</p>
       <div class="inline-actions">
        <button v-if="needsRecovery" class="button session-primary" :disabled="!!managedBusy || !managed?.available"
         @click="managedAction('recover', () => backend.RecoverManagedSession())">
         <Icon name="refresh" :size="16" />{{ managedBusy === 'recover' ? '正在发起恢复…' : '核对并恢复限制' }}
        </button>
-       <button v-else-if="claudeSession && managedActive" class="button session-primary"
+       <button v-else-if="managedActive" class="button session-primary"
         :disabled="!!managedBusy || stopRequested || status === 'blocking'" @click="managedAction('stop', () => backend.StopManagedApplication())">
-        <Icon name="close" :size="16" />{{ stopRequested || status === 'blocking' ? '正在结束…' : '结束 Claude 会话' }}
+        <Icon name="close" :size="16" />{{ stopRequested || status === 'blocking' ? '正在结束…' : claudeSession ? '结束 Claude 会话' : '结束当前会话' }}
        </button>
        <button v-else class="button session-primary" :disabled="claudeStartBlocked"
         @click="managedAction('start', () => backend.StartManagedApplication('claude'))">
         <Icon name="shield" :size="16" />{{ managedBusy === 'start' ? '正在请求管理员授权…' : managed?.takeoverAvailable ? '接管并重启 Claude' : '启动 Claude 并保护' }}
        </button>
        <button v-if="!savedExit || exitDirty" class="button hero-secondary" :disabled="sessionConfigLocked" @click="openExitSetup">配置固定出口</button>
+       <button v-else-if="managed?.directory && (abnormalStop || status === 'failed')" class="button hero-secondary" @click="page = 'diagnostics'">查看会话诊断</button>
       </div>
      </div>
      <div class="session-mark" aria-hidden="true"><Icon name="shield" :size="76" /></div>
@@ -353,11 +307,6 @@ onUnmounted(() => {
       <div><dt>固定公网 IPv4</dt><dd><span :class="{ mono: savedExit }">{{ savedExit || '待保存' }}</span></dd></div>
       <div><dt>v2rayN HTTP 入口</dt><dd class="mono">127.0.0.1:10808</dd></div>
      </dl>
-    </section>
-
-    <section v-if="!claudeSession && managedActive" class="panel current-validation">
-     <div><h2>Chrome 本机验证</h2><p class="muted-copy">{{ managedLabel }} · {{ sessionDescription }}</p></div>
-     <button class="button" @click="page = 'validation'">查看验证会话<Icon name="arrow" :size="16" /></button>
     </section>
 
     <div class="dashboard-grid">
@@ -392,105 +341,14 @@ onUnmounted(() => {
     </div>
    </template>
 
-   <template v-else-if="page === 'validation'">
-    <section class="session-hero" :data-tone="sessionTone" aria-labelledby="session-title">
-     <div class="session-intro">
-      <div class="session-label"><Icon name="shield" :size="18" />{{ claudeSession && (managedActive || needsRecovery) ? 'Claude 会话' : 'Google Chrome 验证' }}</div>
-      <h2 id="session-title" aria-live="polite"><span class="signal-dot"></span>{{ managedLabel }}</h2>
-      <p>{{ sessionDescription }}</p>
-      <div class="inline-actions">
-       <button v-if="needsRecovery" class="button session-primary" :disabled="!!managedBusy || !managed?.available"
-        @click="managedAction('recover', () => backend.RecoverManagedSession())">
-        <Icon name="refresh" :size="16" />{{ managedBusy === 'recover' ? '正在发起恢复…' : '核对并恢复限制' }}
-       </button>
-       <button v-else-if="managedActive" class="button session-primary" :disabled="!!managedBusy || stopRequested || status === 'blocking'"
-        @click="managedAction('stop', () => backend.StopManagedApplication())">
-        <Icon name="close" :size="16" />{{ managedBusy === 'stop' || stopRequested || status === 'blocking' ? '正在结束…' : '结束本次应用' }}
-       </button>
-       <template v-else>
-        <button class="button session-primary" :disabled="startBlocked"
-         @click="managedAction('start', () => backend.StartManagedApplication('chrome'))">
-         <Icon name="shield" :size="16" />{{ managedBusy === 'start' ? '正在请求管理员授权…' : '启动隔离应用并保护' }}
-        </button>
-        <button v-if="waitingForSetup && !statusIssue" class="button hero-secondary"
-         @click="!managedTarget?.executable ? openChromePath() : openExitSetup()">完善启动配置<Icon name="arrow" :size="16" /></button>
-       </template>
-      </div>
-     </div>
-     <div class="session-mark" aria-hidden="true"><Icon name="shield" :size="76" /></div>
-     <dl class="session-metrics">
-      <div><dt>代理入口</dt><dd><span class="mono">127.0.0.1:10808</span><small>v2rayN · HTTP</small></dd></div>
-      <div><dt>固定公网 IPv4</dt><dd><span :class="{ mono: savedExit }">{{ savedExit || '待保存' }}</span><small>会话启动时核对</small></dd></div>
-      <div><dt>最近出口观测</dt><dd><span :class="{ mono: managed?.lastObservedExit }">{{ observedExit }}</span>
-       <small>{{ managed?.exitCheckedAt ? localDateTime(managed.exitCheckedAt) : '启动后显示检测结果' }}</small></dd>
-      </div>
-     </dl>
-    </section>
-
-    <div class="dashboard-grid">
-     <section class="panel panel-body" aria-labelledby="setup-title">
-      <h2 id="setup-title">验证配置</h2>
-      <div class="setup-app validation-exit">
-       <div><h3>固定出口 IPv4</h3><p>{{ exitDirty ? '有尚未保存的 IPv4 修改' : savedExit || '尚未保存' }}</p></div>
-       <button class="button small" :disabled="sessionConfigLocked" @click="openExitSetup">修改出口</button>
-      </div>
-      <div class="setup-app">
-       <div><h3>Google Chrome 路径</h3><p v-if="managedTarget?.executable" class="mono" :title="managedTarget.executable">{{ managedTarget.executable }}</p>
-        <p v-else>尚未登记</p>
-       </div>
-       <button class="button small" @click="openChromePath">{{ managedTarget?.executable ? '查看或修改' : '登记路径' }}</button>
-      </div>
-     </section>
-
-     <section class="panel panel-body" aria-labelledby="scope-title">
-      <h2 id="scope-title">使用提醒</h2>
-      <ul class="scope-list">
-       <li><Icon name="proxy" /><div><strong>启动前准备</strong><p>开启 v2rayN 全局和 TUN，完全退出已有 Chrome。启动保护需要 Windows 管理员授权。</p></div></li>
-       <li><Icon name="apps" /><div><strong>隔离的 Chrome 窗口</strong><p>保护覆盖本次新开的 Chrome 会话。窗口使用临时配置，退出后会清理该配置。</p></div></li>
-       <li><Icon name="globe" /><div><strong>系统 DNS 临时限制</strong><p>保护期间，其他程序的传统 DNS 查询也可能受影响。</p></div></li>
-      </ul>
-     </section>
-    </div>
-    <section v-if="cookieToolsAvailable" class="panel panel-body" aria-labelledby="cookie-tools-title">
-     <h2 id="cookie-tools-title">浏览器数据清理</h2>
-     <p class="muted-copy">隔离 Chrome 的临时配置在会话结束时自动清理。</p>
-     <div v-for="(action, kind) in cookieActions" :key="kind" class="setup-app">
-      <div><h3>{{ kind === 'chrome' ? 'Chrome Cookies' : 'Flash Cookies' }}</h3><p>{{ action.detail }}</p></div>
-      <button class="button small" :disabled="sessionConfigLocked || !!cleaningCookies" @click="confirmCookieCleanup(kind)">
-       {{ cleaningCookies === kind ? '正在清理…' : action.label }}
-      </button>
-     </div>
-     <p v-if="cookieFeedback" :class="['feedback', cookieFeedback.failed ? 'error' : 'success']"
-      :role="cookieFeedback.failed ? 'alert' : 'status'">{{ cookieFeedback.message }}</p>
-    </section>
-   </template>
-
    <template v-else-if="page === 'applications'">
-    <div class="application-grid">
-     <article v-for="app in orderedApps" :key="app.id" :class="['panel', 'app-card', { 'main-app': app.id === 'claude' }]">
-      <header class="section-topline">
-       <div class="app-title"><span class="tile-icon"><Icon :name="app.id === 'claude' ? 'shield' : 'globe'" /></span><h2>{{ app.id === 'claude' ? 'Claude Desktop' : app.name }}</h2></div>
-       <span :class="['pill', app.id === 'claude' ? 'clay-pill' : 'neutral']">{{ app.id === 'claude' ? '自动识别' : '本机验证' }}</span>
-      </header>
-      <p v-if="app.id === 'claude'" class="muted-copy">从「连接概览」启动时，Windows 会查找当前账户安装的官方 Claude Desktop x64。</p>
-      <template v-else>
-      <p class="muted-copy">用于核对本机代理和隔离能力。启动、停止和恢复位于「本机验证」。</p>
-      <form @submit.prevent="saveApplication(app.id)">
-       <label :for="'path-' + app.id">{{ app.name }} 程序路径</label>
-       <div class="field-actions">
-        <input :id="'path-' + app.id" v-model="paths[app.id]" placeholder="选择或粘贴 .exe 文件的完整路径" autocomplete="off" spellcheck="false"
-         :disabled="busy || (app.id === 'chrome' && sessionConfigLocked)" />
-        <button class="button square" type="button" :disabled="busy || (app.id === 'chrome' && sessionConfigLocked)"
-         :aria-label="'选择 ' + app.name + ' 程序'" @click="chooseApp(app.id)"><Icon name="folder" :size="19" /></button>
-       </div>
-       <div class="application-footer">
-        <span :class="{ 'pending-text': paths[app.id] !== app.executable }">{{ paths[app.id] !== app.executable ? '有未保存的修改' : app.executable ? '路径已登记' : '尚未登记路径' }}</span>
-        <button class="button small" type="submit" :disabled="busy || paths[app.id] === app.executable || (app.id === 'chrome' && sessionConfigLocked)">保存路径</button>
-       </div>
-      </form>
-      </template>
-     </article>
-    </div>
+    <article class="panel app-card main-app">
+     <header class="section-topline">
+      <div class="app-title"><span class="tile-icon"><Icon name="shield" /></span><h2>Claude Desktop</h2></div>
+      <span class="pill clay-pill">自动识别</span>
+     </header>
+     <p class="muted-copy">从「连接概览」启动时，Windows 会查找当前账户安装的官方 Claude Desktop x64。</p>
+    </article>
     <DomainReference />
    </template>
 
@@ -530,7 +388,7 @@ onUnmounted(() => {
    <template v-else>
     <section class="panel panel-body diagnostics-panel">
      <div class="section-topline">
-      <div><h2>{{ claudeSession ? '最近 Claude 会话' : '最近 Chrome 验证会话' }}</h2><p class="muted-copy">{{ sessionDescription }}</p></div>
+      <div><h2>{{ claudeSession ? '最近 Claude 会话' : '最近保护会话' }}</h2><p class="muted-copy">{{ sessionDescription }}</p></div>
       <span class="pill" :data-tone="sessionTone">{{ managedLabel }}</span>
      </div>
      <div class="check-grid">
@@ -541,6 +399,7 @@ onUnmounted(() => {
      </div>
      <dl v-if="managed?.directory" class="diagnostic-facts">
       <div><dt>最近出口观测</dt><dd>{{ observedExit }} <span v-if="managed.exitCheckedAt">· {{ localDateTime(managed.exitCheckedAt) }}</span></dd></div>
+      <div v-if="managed.lastExitSuccessAt"><dt>上次核验通过</dt><dd>{{ localDateTime(managed.lastExitSuccessAt) }}</dd></div>
       <div><dt>会话状态更新</dt><dd>{{ managed.updatedAt ? localDateTime(managed.updatedAt) : '暂无记录' }}</dd></div>
       <div><dt>状态代码</dt><dd><code>{{ managed.reason || '暂无记录' }}</code><span v-if="managed.error"> · Windows {{ managed.error }}</span></dd></div>
      </dl>
@@ -571,6 +430,17 @@ onUnmounted(() => {
      <p v-for="warning in snapshot.environment.warnings" :key="warning" class="warning-text">{{ warning }}</p>
     </section>
 
+    <section v-if="cookieToolsAvailable" class="panel panel-body" aria-labelledby="cookie-tools-title">
+     <div class="section-topline">
+      <div><h2 id="cookie-tools-title">Flash 数据清理</h2><p class="muted-copy">{{ flashCleanupDetail }}</p></div>
+      <button class="button small" :disabled="sessionConfigLocked || cleaningCookies" @click="confirmCookieCleanup">
+       {{ cleaningCookies ? '正在清理…' : '清除 Flash Cookies' }}
+      </button>
+     </div>
+     <p v-if="cookieFeedback" :class="['feedback', cookieFeedback.failed ? 'error' : 'success']"
+      :role="cookieFeedback.failed ? 'alert' : 'status'">{{ cookieFeedback.message }}</p>
+    </section>
+
     <section class="panel panel-body">
      <h2>操作日志</h2>
      <div class="log-list">
@@ -587,15 +457,13 @@ onUnmounted(() => {
   </main>
 
   <dialog v-if="cookieToolsAvailable" ref="cookieDialog" class="modal cookie-dialog" aria-labelledby="cookie-dialog-title"
-   aria-describedby="cookie-dialog-detail" @close="cookieSelection = null">
-   <template v-if="cookieSelection">
-    <h2 id="cookie-dialog-title">{{ cookieActions[cookieSelection].label }}</h2>
-    <p id="cookie-dialog-detail" class="muted-copy">{{ cookieActions[cookieSelection].detail }}{{ cookieActions[cookieSelection].effect }}</p>
-    <div class="modal-actions">
-     <button type="button" class="button" autofocus @click="cookieDialog?.close()">取消</button>
-     <button type="button" class="button primary" :disabled="sessionConfigLocked" @click="clearCookies">确认清除</button>
-    </div>
-   </template>
+   aria-describedby="cookie-dialog-detail">
+   <h2 id="cookie-dialog-title">清除 Flash Cookies</h2>
+   <p id="cookie-dialog-detail" class="muted-copy">{{ flashCleanupDetail }}清除后，旧 Flash 应用的网站偏好和本地存档可能丢失。</p>
+   <div class="modal-actions">
+    <button type="button" class="button" autofocus @click="cookieDialog?.close()">取消</button>
+    <button type="button" class="button primary" :disabled="sessionConfigLocked" @click="clearCookies">确认清除</button>
+   </div>
   </dialog>
 
   <div v-if="dialog" class="modal-backdrop" @click.self="!busy && (dialog = false)" @keydown.esc="!busy && (dialog = false)">

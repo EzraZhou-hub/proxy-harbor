@@ -89,7 +89,7 @@ func ValidateConfig(c Config) error {
 			return errors.New("配置文件不能自行声明应用已经通过保护验证")
 		}
 	}
-	// Version 1 files may still contain the retired Codex entry or omit Chrome.
+	// Version 1 files may still contain the retired Chrome and Codex entries.
 	if !apps["claude"] {
 		return errors.New("应用配置不完整")
 	}

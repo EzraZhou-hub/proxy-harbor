@@ -12,7 +12,6 @@ type Client interface {
 	SaveExpectedProxyIPv4(string) (domain.Snapshot, error)
 	DeleteProxy(string) (domain.Snapshot, error)
 	SelectProxy(string) (domain.Snapshot, error)
-	ConfigureApplication(string, string) (domain.Snapshot, error)
 	RefreshEnvironment() domain.Snapshot
 	StartProtection() error
 }

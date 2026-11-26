@@ -68,6 +68,10 @@ export interface ManagedSession {
     "proxyExit": string;
     "lastObservedExit": string;
     "exitCheckedAt": string;
+    "lastExitSuccessAt": string;
+    "exitState": string;
+    "exitFailures": number;
+    "exitStopCause": string;
     "tunIndex": number;
     "updatedAt": string;
     "blockedAt": string;

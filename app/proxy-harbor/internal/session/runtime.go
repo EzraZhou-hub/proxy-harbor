@@ -147,19 +147,34 @@ func (r *Runtime) statusLocked() domain.ManagedSession {
 	if r.current != "" {
 		if file, err := os.Open(filepath.Join(r.current, "exit-check.json")); err == nil {
 			var probe struct {
-				Observed  string
-				CheckedAt string
+				Observed      string
+				CheckedAt     string
+				LastSuccessAt string
 			}
 			data, err := io.ReadAll(io.LimitReader(file, 8193))
 			file.Close()
 			if err == nil && len(data) <= 8192 && json.Unmarshal(data, &probe) == nil {
 				s.LastObservedExit, s.ExitCheckedAt = probe.Observed, probe.CheckedAt
+				if s.LastExitSuccessAt == "" {
+					s.LastExitSuccessAt = probe.LastSuccessAt
+				}
 			}
 		}
 	}
 	s.Available = helperApproved(r.helper)
 	s.TakeoverAvailable = s.Available && takeoverAdmitted()
 	s.Detail = reasonText[s.Reason]
+	if s.State == "monitoring" && s.ExitState == "retrying" {
+		s.Detail = "本轮出口核验失败，正在复核固定代理出口。"
+	}
+	if s.Reason == "exit_unverified" {
+		switch s.ExitStopCause {
+		case "consecutive_failures":
+			s.Detail = "连续两轮无法核对代理出口，已触发断开。"
+		case "verification_expired":
+			s.Detail = "距上次成功核验已满 30 秒，已触发断开。"
+		}
+	}
 	if s.State == "blocking" {
 		s.Detail = "正在阻断并结束本次应用，等待进程退出确认。"
 	} else if s.State == "cleanup_required" && s.Detail == "" {

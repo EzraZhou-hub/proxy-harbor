@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"proxyharbor/internal/domain"
 	"proxyharbor/internal/engine"
 	"proxyharbor/internal/store"
@@ -68,19 +67,12 @@ func TestConfigurationSurvivesRestartAndDeletion(t *testing.T) {
 	if _, err = manager.SaveProxy(first); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(t.TempDir(), "desktop.exe")
-	if err = os.WriteFile(executable, []byte("not executed"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = manager.ConfigureApplication("chrome", executable); err != nil {
-		t.Fatal(err)
-	}
 	restarted, err := New(repo, engine.Unavailable{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := restarted.Snapshot()
-	if len(snapshot.Config.Profiles) != 3 || snapshot.Config.Profiles[0].Name != "已编辑" || snapshot.Config.Applications[1].Executable != executable {
+	if len(snapshot.Config.Profiles) != 3 || snapshot.Config.Profiles[0].Name != "已编辑" {
 		t.Fatal("persisted configuration was lost")
 	}
 	snapshot.Config.Profiles[0].Name = "external mutation"
@@ -99,13 +91,14 @@ func TestConfigurationSurvivesRestartAndDeletion(t *testing.T) {
 	}
 }
 
-func TestLegacyConfigDropsRetiredApplicationOnSave(t *testing.T) {
+func TestLegacyConfigDropsRetiredApplicationsOnSave(t *testing.T) {
 	repo := store.New(t.TempDir())
 	legacy := domain.DefaultConfig()
 	legacy.ExpectedProxyIPv4 = "131.103.130.202"
-	legacy.Applications = append(legacy.Applications[:1], domain.TargetApplication{
-		ID: "codex", Name: "Codex", Compatibility: "unverified",
-	})
+	legacy.Applications = append(legacy.Applications,
+		domain.TargetApplication{ID: "chrome", Name: "Google Chrome", Executable: `C:\old\chrome.exe`, Compatibility: "unverified"},
+		domain.TargetApplication{ID: "codex", Name: "Codex", Compatibility: "unverified"},
+	)
 	data, err := json.Marshal(legacy)
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +112,7 @@ func TestLegacyConfigDropsRetiredApplicationOnSave(t *testing.T) {
 	}
 	snapshot := manager.Snapshot()
 	if snapshot.Startup.Error != "" || snapshot.Config.ExpectedProxyIPv4 != legacy.ExpectedProxyIPv4 ||
-		len(snapshot.Config.Applications) != 2 || snapshot.Config.Applications[0].ID != "claude" ||
-		snapshot.Config.Applications[1].ID != "chrome" {
+		len(snapshot.Config.Applications) != 1 || snapshot.Config.Applications[0] != legacy.Applications[0] {
 		t.Fatalf("unexpected desktop configuration: %+v", snapshot.Config)
 	}
 	unchanged, err := os.ReadFile(repo.Path())
@@ -131,7 +123,7 @@ func TestLegacyConfigDropsRetiredApplicationOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved, err := repo.Load()
-	if err != nil || len(saved.Applications) != 2 || saved.Applications[1].ID != "chrome" {
+	if err != nil || len(saved.Applications) != 1 || saved.Applications[0] != legacy.Applications[0] {
 		t.Fatalf("unexpected saved applications: %+v, %v", saved.Applications, err)
 	}
 }

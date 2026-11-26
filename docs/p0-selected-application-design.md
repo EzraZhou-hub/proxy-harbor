@@ -10,7 +10,7 @@
 
 新增 native/p0/dns_block_lab.c 和 scripts/p0/build-dns-block-lab.ps1，原型只接受来宾固定路径与环境标记。动态 WFP 会话创建四条 ALE 出站规则，覆盖 IPv4／IPv6 的 53／853 目标端口。原型退出或被强制终止后，会话关闭并释放规则。35 项基础检查和 16 项真实 Chrome／受控 TLS 代理组合检查通过。依据微软[对象生命周期说明](https://learn.microsoft.com/en-us/windows/win32/fwp/object-management)，此类动态对象随其会话终止而删除。该行为也带来下一步必须解决的顺序要求：受管应用应先停止，随后解除 DNS 限制。
 
-该实验核对了共享系统 DNS 和本地 TCP／UDP 双栈端点，未覆盖任意 443／非标准端口 DoH。需要继续研究 Windows DNS 服务的专门限制，或在保护期间禁用对应自动加密解析并精确恢复原值。代理本身的必要解析也须保持可用，不能把全部 DNS 阻断后的可控实验代理成功直接推广到现有 v2rayN。[本轮原始证据和源码摘要](../.local/p0/sandbox/20261117-063027-9afd75/validation.json)
+该实验核对了共享系统 DNS 和本地 TCP／UDP 双栈端点，未覆盖任意 443／非标准端口 DoH。需要继续研究 Windows DNS 服务的专门限制，或在保护期间禁用对应自动加密解析并精确恢复原值。代理本身的必要解析也须保持可用，不能把全部 DNS 阻断后的可控实验代理成功直接推广到现有 v2rayN。本轮原始证据和源码摘要（`.local/p0/sandbox/20261117-063027-9afd75/validation.json`）
 
 另核对了 Windows 原生进程隔离路线。普通 AppContainer 的历史 Chrome 失败为 Crashpad CreateNamedPipe 拒绝访问，与微软文档中 AppContainer 命名管道的 LOCAL 命名空间限制相符，尚不能断言这是唯一兼容问题。Win32 app isolation 支持 appSilo，但微软仍标为预览，要求 Windows 11 build 26100 及以上和重新打包。开发机只读版本号为 26300，已有 SDK 26100，因此具备继续做隔离打包实验的基础。该路线尚未执行 Chrome 打包或运行测试，也未改动宿主包注册。[命名管道约束](https://learn.microsoft.com/en-us/windows/desktop/api/winbase/nf-winbase-getnamedpipeserverprocessid)、[隔离打包说明](https://learn.microsoft.com/en-us/windows/win32/secauthz/app-isolation-packaging-with-vs)
 

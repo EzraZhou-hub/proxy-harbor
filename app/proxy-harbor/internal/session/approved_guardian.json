@@ -4,13 +4,13 @@
   "claudeDesktop": true,
   "claudeTakeover": true,
   "quarantined": false,
-  "scope": "Windows x64 1.1.3 official Claude Desktop MSIX takeover under the current Windows user. Since 1.1.3 the worker no longer attaches a debugger to the process tree: Claude is created suspended, assigned to a kill-on-close job, verified, then resumed, so Code-mode commands run natively. Descendants inherit the user's TUN/global proxy path while the client image alone stays bound to the explicit proxy by WFP. If the job cannot be created or nested, the worker falls back to terminating the root and its linked descendants and records the fallback in takeover-containment.json. Exit probing, TUN checks and WFP rules are unchanged. The fixed-exit check and same-user admission were validated on 1.1.2; the job supervision itself is compiled, unit-tested and covered by a standalone job containment check, and awaits the user's own signed-in run. Since 1.2.1 the client image may also reach IPv4 and IPv6 loopback so local preview servers and MCP bridges keep working; loopback never leaves the host, and every non-loopback target still has to use the explicit proxy port. Since 1.2.2 a single timed-out exit probe is recorded and retried, two consecutive failures still stop the session, an exit-address mismatch still stops it immediately, and the probe falls back to a second endpoint. Broader historical P0 acceptance is pending.",
+  "scope": "Windows x64 1.1.3 official Claude Desktop MSIX takeover under the current Windows user. Since 1.1.3 the worker no longer attaches a debugger to the process tree: Claude is created suspended, assigned to a kill-on-close job, verified, then resumed, so Code-mode commands run natively. Descendants inherit the user's TUN/global proxy path while the client image alone stays bound to the explicit proxy by WFP. If the job cannot be created or nested, the worker falls back to terminating the root and its linked descendants and records the fallback in takeover-containment.json. Exit probing, TUN checks and WFP rules are unchanged. The fixed-exit check and same-user admission were validated on 1.1.2; the job supervision itself is compiled, unit-tested and covered by a standalone job containment check, and awaits the user's own signed-in run. Since 1.2.1 the client image may also reach IPv4 and IPv6 loopback so local preview servers and MCP bridges keep working; loopback never leaves the host, and every non-loopback target still has to use the explicit proxy port. Since 1.2.2 a single timed-out exit probe is recorded and retried, two consecutive failures still stop the session, an exit-address mismatch still stops it immediately, and the probe falls back to a second endpoint. Broader historical P0 acceptance is pending. In 1.2.3 the same startup gate and mismatch policy apply. The two HTTPS attempts have wall-clock limits, retry sooner, and cannot recover a verification that reached the 30-second deadline. The WFP rules and application scope are unchanged.",
   "evidenceBundle": "20261119-100132-e97dab",
-  "guardianSha256": "8bff933ce5193da8deb110979e0d62edcecc31b0af193e513dbf37fc543fdc54",
+  "guardianSha256": "4c62df029e0afc798f2a6abb24c6401e6214552be4be604f2636333e1c852317",
   "sourceHashes": [
     {
       "path": "native/session/guardian.c",
-      "sha256": "344f28a2bb61230bc22bbce620ff63db482b7e50a1455860caeada829b3fff30"
+      "sha256": "ce7d5555045fd27f32732991f47c2a786c1a453d1685b4ab229a43fe3b422562"
     },
     {
       "path": "native/session/account.c",
@@ -61,6 +61,6 @@
       "sha256": "c496f7ec7775b3f06647f61be484a096bafe1796c15f2558df26e25f3d8dfe11"
     }
   ],
-  "verification": "compile_unit_loopback_and_exit_tolerance_pending_live_run",
-  "releaseEvidence": ".local/p0/sandbox/20261119-100132-e97dab/results/takeover-release-evidence.json"
+  "verification": "compiled_policy_and_loopback_regressions_and_local_proxy_probe",
+  "releaseEvidence": "docs/exit-probe-tolerance.md"
 }

@@ -10,11 +10,8 @@ test('real backend: configuration persists, diagnostics stay unverified, no prot
  await page.goto('/')
  await expect(page.getByRole('heading', { name: 'Claude Desktop', exact: true })).toBeVisible()
  await expect(page.getByRole('button', { name: '启动 Claude 并保护', exact: true })).toBeDisabled()
- await expect(page.getByRole('button', { name: '启动隔离应用并保护' })).toHaveCount(0)
- await page.getByRole('button', { name: '本机验证', exact: true }).click()
- await expect(page.getByText('未受保护', { exact: true })).toBeVisible()
- await expect(page.getByRole('button', { name: '启动隔离应用并保护' })).toBeDisabled()
- await page.getByRole('button', { name: '修改出口', exact: true }).click()
+ await expect(page.getByRole('button', { name: '本机验证', exact: true })).toHaveCount(0)
+ await page.getByRole('button', { name: '配置固定出口', exact: true }).click()
  await expect(page.getByLabel('固定代理出口 IPv4')).toBeFocused()
  await page.getByLabel('固定代理出口 IPv4').fill('131.103.130.202')
  await expect(page.getByText('有尚未保存的 IPv4 修改。')).toBeVisible()
@@ -23,12 +20,10 @@ test('real backend: configuration persists, diagnostics stay unverified, no prot
  await page.reload()
  await expect(page.getByLabel('固定代理出口 IPv4')).toHaveValue('131.103.130.202')
  await expect(page.getByRole('button', { name: '启动 Claude 并保护', exact: true })).toBeDisabled()
- await page.getByRole('button', { name: '本机验证', exact: true }).click()
- await page.getByRole('button', { name: '登记路径', exact: true }).click()
- await expect(page.getByLabel('Google Chrome 程序路径')).toBeFocused()
- await expect(page.locator('article').first().getByRole('heading', { name: 'Claude Desktop', exact: true })).toBeVisible()
+ await page.getByRole('button', { name: '应用管理', exact: true }).click()
+ await expect(page.locator('article').getByRole('heading', { name: 'Claude Desktop', exact: true })).toBeVisible()
+ await expect(page.getByRole('heading', { name: 'Google Chrome', exact: true })).toHaveCount(0)
  await expect(page.getByRole('heading', { name: 'Codex', exact: true })).toHaveCount(0)
- await expect(page.getByRole('button', { name: '启动隔离应用并保护' })).toHaveCount(0)
  await page.getByRole('button', { name: '连接概览', exact: true }).click()
  const scratch = resolve(process.cwd(), '../../../.local')
  mkdirSync(scratch, { recursive: true })
@@ -74,18 +69,10 @@ test('real backend: configuration persists, diagnostics stay unverified, no prot
  await page.getByRole('button', { name: '删除 SOCKS5 测试入口', exact: true }).click()
  await expect(page.getByRole('heading', { name: 'SOCKS5 测试入口', exact: true })).toHaveCount(0)
 
- const executable = resolve(scratch, 'e2e-fixture.exe')
- writeFileSync(executable, 'Path fixture. This file is never executed.')
- await page.getByRole('button', { name: '应用管理', exact: true }).click()
- const chrome = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Google Chrome', exact: true }) })
- await chrome.getByLabel('Google Chrome 程序路径').fill(executable)
- await chrome.getByRole('button', { name: '保存路径', exact: true }).click()
- await expect(chrome.getByText('路径已登记', { exact: true })).toBeVisible()
-
  await page.getByRole('button', { name: '诊断与日志', exact: true }).click()
  await expect(page.getByText('未运行', { exact: true })).toHaveCount(2)
  await expect(page.locator('.check-card').filter({ has: page.getByRole('heading', { name: '系统 DNS', exact: true }) })).toContainText('待启动')
- await expect(page.locator('.check-card').filter({ has: page.getByRole('heading', { name: 'WebRTC', exact: true }) })).toContainText('待启动')
+ await expect(page.getByRole('heading', { name: 'WebRTC', exact: true })).toHaveCount(0)
  await page.getByRole('button', { name: '刷新本机信息', exact: true }).click()
  await expect(page.getByRole('status')).toContainText('本机信息已刷新')
  const downloadPromise = page.waitForEvent('download')
@@ -93,42 +80,55 @@ test('real backend: configuration persists, diagnostics stay unverified, no prot
  expect((await downloadPromise).suggestedFilename()).toBe('proxy-harbor-report.json')
  await page.screenshot({ path: resolve(scratch, 'preview-diagnostics.png'), fullPage: true })
  await page.getByRole('button', { name: '连接概览', exact: true }).click()
- await expect(page.getByRole('button', { name: '启动隔离应用并保护' })).toHaveCount(0)
- await page.getByRole('button', { name: '本机验证', exact: true }).click()
- await expect(page.getByRole('button', { name: '启动隔离应用并保护' })).toBeDisabled()
+ await expect(page.getByRole('button', { name: '本机验证', exact: true })).toHaveCount(0)
  await page.setViewportSize({ width: 960, height: 760 })
  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
  expect(errors).toEqual([])
  expect(externalRequests).toEqual([])
 })
 
-test('Chrome path draft survives unrelated proxy saves and environment refreshes', async ({ page }) => {
- const scratch = resolve(process.cwd(), '../../../.local')
- mkdirSync(scratch, { recursive: true })
- const executable = resolve(scratch, 'chrome-draft-fixture.exe')
- writeFileSync(executable, 'Path fixture only. Never executed.')
+test('diagnostics distinguish an exit retry from an expired verification', async ({ page }) => {
+ let state = {
+  available: true, state: 'monitoring', applicationId: 'fixture', reason: 'proxy_only',
+  directory: 'fixture', proxyExit: '1.1.1.1', lastExitSuccessAt: '2026-11-26T03:42:00Z',
+  exitState: 'retrying', exitStopCause: '', detail: '本轮出口核验失败，正在复核固定代理出口。',
+ }
+ await page.route('**/wails/runtime', async route => {
+  const { args } = route.request().postDataJSON()
+  if (args?.methodID === 3747138472) return route.fulfill({ json: state })
+  return route.continue()
+ })
  await page.goto('/')
- await page.getByRole('button', { name: '应用管理', exact: true }).click()
- await page.getByLabel('Google Chrome 程序路径').fill(executable)
- await page.getByRole('button', { name: /^代理配置/ }).click()
- await page.getByRole('button', { name: '添加代理', exact: true }).first().click()
- const modal = page.getByRole('dialog')
- await modal.getByLabel('配置名称').fill('Draft preservation')
- await modal.getByLabel('代理地址').fill('127.0.0.1')
- await modal.getByRole('button', { name: '保存配置', exact: true }).click()
- await expect(modal).toBeHidden()
- await page.getByRole('button', { name: '应用管理', exact: true }).click()
- await expect(page.getByLabel('Google Chrome 程序路径')).toHaveValue(executable)
  await page.getByRole('button', { name: '诊断与日志', exact: true }).click()
- await page.getByRole('button', { name: '刷新本机信息', exact: true }).click()
- await expect(page.getByRole('status')).toContainText('本机信息已刷新')
- await page.getByRole('button', { name: '应用管理', exact: true }).click()
- await expect(page.getByLabel('Google Chrome 程序路径')).toHaveValue(executable)
- const chrome = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Google Chrome', exact: true }) })
- await chrome.getByLabel('Google Chrome 程序路径').fill(` ${executable} `)
- await chrome.getByRole('button', { name: '保存路径', exact: true }).click()
- await expect(chrome.getByLabel('Google Chrome 程序路径')).toHaveValue(executable)
- await expect(chrome.getByRole('button', { name: '保存路径', exact: true })).toBeDisabled()
+ await expect(page.getByText('正在复核出口', { exact: true })).toBeVisible()
+ await expect(page.getByText('上次核验通过', { exact: true })).toBeVisible()
+ state = {
+  ...state, state: 'stopped', exitState: 'failed', reason: 'exit_unverified',
+  exitStopCause: 'verification_expired', detail: '距上次成功核验已满 30 秒，已触发断开。',
+ }
+ await expect(page.getByText('距上次成功核验已满 30 秒，已触发断开。', { exact: true })).toBeVisible()
+})
+
+test('an existing legacy session can still be stopped from the overview', async ({ page }) => {
+ let stops = 0
+ let state = {
+  available: true, state: 'monitoring', applicationId: 'chrome', detail: '会话保护中。',
+ }
+ await page.route('**/wails/runtime', async route => {
+  const { args } = route.request().postDataJSON()
+  if (args?.methodID === 3747138472) return route.fulfill({ json: state })
+  if (args?.methodID === 1340240764) {
+   stops++
+   state = { ...state, state: 'stopped', detail: '会话已停止。' }
+   return route.fulfill({ json: state })
+  }
+  return route.continue()
+ })
+ await page.goto('/')
+ const stop = page.getByRole('button', { name: '结束当前会话', exact: true })
+ await stop.click()
+ await expect(stop).toHaveCount(0)
+ expect(stops).toBe(1)
 })
 
 test('the approved takeover action starts Claude from the overview', async ({ page }) => {

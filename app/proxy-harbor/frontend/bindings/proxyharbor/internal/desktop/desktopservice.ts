@@ -9,16 +9,8 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as domain$0 from "../domain/models.js";
 
-export function ChooseExecutable(): $CancellablePromise<string> {
-    return $Call.ByID(394963368);
-}
-
 export function ClearBrowserCookies(kind: string, confirmed: boolean): $CancellablePromise<number> {
     return $Call.ByID(26190173, kind, confirmed);
-}
-
-export function ConfigureApplication(id: string, path: string): $CancellablePromise<domain$0.Snapshot> {
-    return $Call.ByID(771790683, id, path);
 }
 
 export function CookieCleanupAvailable(): $CancellablePromise<boolean> {
